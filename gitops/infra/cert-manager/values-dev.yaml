@@ -1,0 +1,20 @@
+# cert-manager values for dev spoke
+replicaCount: 1
+
+installCRDs: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Dev-specific settings
+global:
+  leaderElection:
+    namespace: cert-manager
+
+prometheus:
+  enabled: false

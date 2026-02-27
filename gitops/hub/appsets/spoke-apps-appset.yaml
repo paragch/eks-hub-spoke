@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: spoke-apps
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - matrix:
+        generators:
+          - clusters:
+              selector:
+                matchLabels:
+                  cluster-role: spoke
+          - git:
+              repoURL: YOUR_REPO_URL
+              revision: HEAD
+              directories:
+                - path: 'gitops/apps/{{index .metadata.labels "environment"}}/*'
+
+  template:
+    metadata:
+      name: '{{.name}}-{{.path.basename}}'
+      labels:
+        environment: '{{index .metadata.labels "environment"}}'
+        app: '{{.path.basename}}'
+    spec:
+      project: apps
+      source:
+        repoURL: YOUR_REPO_URL
+        targetRevision: HEAD
+        path: '{{.path.path}}'
+      destination:
+        server: '{{.server}}'
+        namespace: '{{.path.basename}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

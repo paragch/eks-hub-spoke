@@ -1,0 +1,35 @@
+# ArgoCD Spoke values — single replica, ClusterIP, minimal footprint
+global:
+  {}
+
+server:
+  replicas: 1
+  service:
+    type: ClusterIP
+  insecure: true
+  extraArgs:
+    - --insecure
+
+repoServer:
+  replicas: 1
+
+applicationSet:
+  enabled: false
+
+notifications:
+  enabled: false
+
+dex:
+  enabled: false
+
+redis:
+  enabled: true
+
+configs:
+  params:
+    server.insecure: "true"
+  cm:
+    application.resourceTrackingMethod: annotation
+
+controller:
+  replicas: 1

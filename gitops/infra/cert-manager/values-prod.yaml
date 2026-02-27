@@ -1,0 +1,26 @@
+# cert-manager values for prod spoke
+replicaCount: 2
+
+installCRDs: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Prod-specific settings
+global:
+  leaderElection:
+    namespace: cert-manager
+
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
