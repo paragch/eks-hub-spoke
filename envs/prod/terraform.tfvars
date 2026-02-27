@@ -1,4 +1,4 @@
-aws_region   = "us-east-1"
+aws_region   = "eu-west-2"
 cluster_name = "eks-prod"
 
 vpc_cidr             = "10.2.0.0/16"

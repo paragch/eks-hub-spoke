@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 BOOTSTRAP_DIR="$ROOT_DIR/bootstrap"
 
-AWS_REGION="${1:-us-east-1}"
+AWS_REGION="${1:-eu-west-2}"
 
 echo "==> Bootstrapping Terraform state backend in $AWS_REGION"
 

@@ -5,8 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Read region from hub tfvars (default us-east-1)
-AWS_REGION=$(grep 'aws_region' "$ROOT_DIR/envs/hub/terraform.tfvars" | awk -F'"' '{print $2}' || echo "us-east-1")
+# Read region from hub tfvars (default eu-west-2)
+AWS_REGION=$(grep 'aws_region' "$ROOT_DIR/envs/hub/terraform.tfvars" | awk -F'"' '{print $2}' || echo "eu-west-2")
 
 CLUSTERS=(
   "eks-hub:hub"

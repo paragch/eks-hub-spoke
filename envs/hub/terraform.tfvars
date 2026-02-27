@@ -1,4 +1,4 @@
-aws_region    = "us-east-1"
+aws_region    = "eu-west-2"
 cluster_name  = "eks-hub"
 state_bucket  = "REPLACE_WITH_STATE_BUCKET"
 
