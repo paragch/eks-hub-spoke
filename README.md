@@ -124,8 +124,10 @@ Wait ~2 minutes for `OrganizationAccountAccessRole` to propagate.
 #### 3. Deploy clusters
 
 ```bash
-./scripts/apply-all.sh   # accounts → dev + prod (parallel) → hub
+./scripts/apply-all.sh
 ```
+
+Applies accounts → dev+prod (parallel) → hub. Saves progress to `.apply-all-progress` — re-running resumes from the first incomplete step. Use `--reset` to restart from scratch.
 
 #### 4. Get kubeconfigs
 
@@ -194,8 +196,10 @@ To force a full restart:
 ### Clusters only (keep accounts and state backend)
 
 ```bash
-./scripts/teardown.sh   # hub → dev + prod (parallel) → accounts state
+./scripts/teardown.sh
 ```
+
+Destroys hub → dev+prod (parallel) → accounts state. Saves progress to `.teardown-progress` — re-running resumes from the first incomplete step, skipping the `'yes'` confirmation. Use `--reset` to restart from scratch.
 
 > **Note on account closure**: `aws_organizations_account` is created with `close_on_deletion = false`. Running `terraform destroy` removes the resource from state but does **not** close the AWS account. To permanently close an account:
 > ```bash
