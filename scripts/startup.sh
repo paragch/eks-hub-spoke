@@ -19,7 +19,8 @@
 # Prerequisites:
 #   • AWS CLI configured with management account credentials
 #   • Terraform >= 1.6, jq
-#   • envs/accounts/terraform.tfvars — fill in hub/dev/prod email addresses
+#   • envs/accounts/terraform.tfvars.example — copy to terraform.tfvars and
+#     fill in hub/dev/prod email addresses (startup.sh does the copy for you)
 #
 # Usage:
 #   ./scripts/startup.sh                # interactive
@@ -94,6 +95,29 @@ load_existing_config() {
   [[ "${HUB_ACCOUNT_ID:-}"  == *REPLACE* ]] && HUB_ACCOUNT_ID=""
   [[ "${DEV_ACCOUNT_ID:-}"  == *REPLACE* ]] && DEV_ACCOUNT_ID=""
   [[ "${PROD_ACCOUNT_ID:-}" == *REPLACE* ]] && PROD_ACCOUNT_ID=""
+}
+
+# ── Initialise tfvars from examples (fresh clone) ─────────────────────────────
+# For each env, copy terraform.tfvars.example → terraform.tfvars when the
+# latter does not yet exist. Lets startup.sh write bucket names / account IDs
+# into the .tfvars without ever modifying the .example templates.
+init_tfvars() {
+  local changed=0
+  for env in accounts dev prod hub; do
+    local tfvars="$ROOT_DIR/envs/$env/terraform.tfvars"
+    local example="${tfvars}.example"
+    if [[ ! -f "$tfvars" && -f "$example" ]]; then
+      cp "$example" "$tfvars"
+      log_ok "Created envs/$env/terraform.tfvars from .example"
+      changed=1
+    fi
+  done
+  if [[ $changed -eq 1 ]]; then
+    echo ""
+    echo "  Next step: edit envs/accounts/terraform.tfvars and fill in the three"
+    echo "  unique email addresses, then re-run this script."
+    echo ""
+  fi
 }
 
 # ── Print checkpoint status ────────────────────────────────────────────────────
@@ -297,6 +321,9 @@ if [[ -n "$RESET" ]]; then
   rm -f "$CHECKPOINT"
   log_ok "Checkpoint cleared — starting from scratch"
 fi
+
+# Copy .example → .tfvars for any env that doesn't have one yet.
+init_tfvars
 
 # Always load values that may have been written by a previous run.
 # This populates BUCKET_NAME, HUB_ACCOUNT_ID, etc. so skipped steps

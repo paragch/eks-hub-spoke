@@ -16,6 +16,10 @@ kubeconfig
 *kubeconfig
 kubeconfig*
 
+# terraform.tfvars contain real account IDs / emails after startup.sh runs.
+# Keep only the .example templates in version control.
+envs/*/terraform.tfvars
+
 # OS
 .DS_Store
 Thumbs.db

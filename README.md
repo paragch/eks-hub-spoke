@@ -45,7 +45,14 @@ VPCs are connected via AWS Transit Gateway. The TGW lives in the hub account and
 
 ### Option A — One command (recommended)
 
-Fill in the three email addresses in `envs/accounts/terraform.tfvars`, then:
+Copy the accounts template and fill in three unique email addresses:
+
+```bash
+cp envs/accounts/terraform.tfvars.example envs/accounts/terraform.tfvars
+# edit envs/accounts/terraform.tfvars — set hub_account_email, dev_account_email, prod_account_email
+```
+
+Then run:
 
 ```bash
 ./scripts/startup.sh
@@ -97,13 +104,20 @@ Substitute the bucket name in all config files:
 
 ```bash
 BUCKET=<output-from-bootstrap>
-find envs -name '*.tf' -o -name '*.tfvars' | \
+find envs -name 'backend.tf' -o -name 'terraform.tfvars' | \
   xargs sed -i '' "s/REPLACE_WITH_STATE_BUCKET/$BUCKET/g"
 ```
 
 #### 2. Create AWS member accounts
 
-Fill in `envs/accounts/terraform.tfvars` with unique email addresses, then:
+Copy and fill in the accounts template with unique email addresses:
+
+```bash
+cp envs/accounts/terraform.tfvars.example envs/accounts/terraform.tfvars
+# edit envs/accounts/terraform.tfvars
+```
+
+Then:
 
 ```bash
 cd envs/accounts && terraform init && terraform apply
@@ -115,6 +129,11 @@ Note the account IDs from the outputs and substitute them in the tfvars:
 HUB=$(terraform output -raw hub_account_id)
 DEV=$(terraform output -raw dev_account_id)
 PRD=$(terraform output -raw prod_account_id)
+
+# Copy remaining templates first (if not already done)
+for env in dev prod hub; do
+  cp envs/$env/terraform.tfvars.example envs/$env/terraform.tfvars
+done
 
 sed -i '' "s/REPLACE_WITH_HUB_ACCOUNT_ID/$HUB/g"  envs/hub/terraform.tfvars
 sed -i '' "s/REPLACE_WITH_DEV_ACCOUNT_ID/$DEV/g"  envs/dev/terraform.tfvars  envs/hub/terraform.tfvars
