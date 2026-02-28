@@ -290,7 +290,7 @@ resource "aws_eks_node_group" "main" {
   node_role_arn   = var.node_role_arn
   subnet_ids      = var.private_subnet_ids
 
-  ami_type       = "AL2_x86_64"
+  ami_type       = "BOTTLEROCKET_x86_64"
   capacity_type  = "ON_DEMAND"
   instance_types = [var.node_instance_type]
 
