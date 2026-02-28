@@ -57,10 +57,28 @@ This script handles everything end-to-end:
 5. Deploys hub cluster + Transit Gateway
 6. Updates your local kubeconfig
 
-Use `--auto-approve` to skip interactive prompts (CI):
+**Flags**
+
+| Flag | Effect |
+|---|---|
+| _(none)_ | Interactive — confirms once before starting, shows `terraform plan` before each apply |
+| `--auto-approve` | Non-interactive / CI — skips all prompts, applies without plan review |
+| `--reset` | Clears the checkpoint file and starts from scratch |
+| `--reset --auto-approve` | Both combined |
+
+**Resume after failure**
+
+Progress is saved to `.startup-progress` after each step completes. If the script fails or is interrupted, re-running it resumes from the first incomplete step — all earlier steps are skipped instantly:
+
+```
+--- Step 1 — Bootstrap (bucket: eks-hub-spoke-tfstate-a1b2) (already done — skipping)
+--- Step 2 — Accounts (hub: 111111111111  dev: 222222222222  prod: ...) (already done — skipping)
+```
+
+To force a full restart from scratch:
 
 ```bash
-./scripts/startup.sh --auto-approve
+./scripts/startup.sh --reset
 ```
 
 ---
