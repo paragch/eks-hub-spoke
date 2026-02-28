@@ -1,155 +1,234 @@
 #!/usr/bin/env bash
-# shutdown.sh — Full environment teardown:
-#   1. Destroy hub cluster (Transit Gateway, EKS, ArgoCD, Karpenter)
-#   2. Destroy dev and prod clusters in parallel
-#   3. Remove hub / dev / prod accounts from Terraform state
-#   4. Optionally destroy the S3 state backend (bootstrap)
+# shutdown.sh — Full environment teardown with checkpoint/resume support.
+#
+#   Steps
+#   ──────────────────────────────────────────────────────────
+#   1. hub        Destroy hub cluster (TGW, EKS, ArgoCD, Karpenter)
+#   2. spokes     Destroy dev + prod clusters in parallel
+#   3. accounts   Remove accounts from Terraform state
+#   4. bootstrap  (Optional) Destroy S3 state bucket + DynamoDB table
+#   ──────────────────────────────────────────────────────────
+#
+#   Progress is written to .shutdown-progress in the repo root.
+#   Re-running the script resumes from the first incomplete step.
+#   Each step is only marked done after it fully succeeds.
 #
 # NOTE: AWS accounts are NOT closed by this script.
-#   aws_organizations_account.close_on_deletion = false is intentional.
-#   To close the accounts permanently, do so manually from the
-#   AWS Organizations console or CLI after running this script.
+#   close_on_deletion = false is intentional — accounts are only removed
+#   from Terraform state. Close them manually if needed:
+#     aws organizations close-account --account-id <ID>
 #
-# Usage: ./scripts/shutdown.sh
+# Usage:
+#   ./scripts/shutdown.sh          # interactive
+#   ./scripts/shutdown.sh --reset  # clear checkpoint and start fresh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+CHECKPOINT="$ROOT_DIR/.shutdown-progress"
+
+RESET=""
+for arg in "$@"; do
+  [[ "$arg" == "--reset" ]] && RESET="1"
+done
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; GREY='\033[0;90m'; NC='\033[0m'
 log_step() { echo -e "\n${CYAN}=======================================================${NC}\n${CYAN}  $*${NC}\n${CYAN}=======================================================${NC}"; }
 log_ok()   { echo -e "${GREEN}==> $*${NC}"; }
+log_skip() { echo -e "${GREY}--- $* (already done — skipping)${NC}"; }
 log_warn() { echo -e "${YELLOW}==> WARNING: $*${NC}"; }
 log_err()  { echo -e "${RED}==> ERROR: $*${NC}" >&2; }
 
-# ── Confirmation gate ──────────────────────────────────────────────────────────
+# ── Checkpoint helpers ─────────────────────────────────────────────────────────
+step_done() { [[ -f "$CHECKPOINT" ]] && grep -qx "$1" "$CHECKPOINT"; }
+mark_done() { echo "$1" >> "$CHECKPOINT"; }
+
+# ── Print checkpoint status ────────────────────────────────────────────────────
+show_progress() {
+  local steps=("hub" "spokes" "accounts" "bootstrap")
+  echo ""
+  echo "  Checkpoint: $CHECKPOINT"
+  for s in "${steps[@]}"; do
+    if step_done "$s"; then
+      echo -e "    ${GREEN}✓${NC} $s"
+    else
+      echo -e "    ${GREY}○${NC} $s"
+    fi
+  done
+  echo ""
+}
+
+# ── Header ────────────────────────────────────────────────────────────────────
 echo -e "\n${RED}#######################################################${NC}"
 echo -e "${RED}#        eks-hub-spoke  SHUTDOWN                      #${NC}"
 echo -e "${RED}#######################################################${NC}"
-echo ""
-log_warn "This will PERMANENTLY DESTROY:"
-echo "    • All three EKS clusters (hub, dev, prod)"
-echo "    • Transit Gateway + all VPC attachments and routes"
-echo "    • All associated VPCs, IAM roles, and node groups"
-echo "    • ArgoCD, Karpenter, and all in-cluster resources"
-echo "    • hub / dev / prod Terraform state entries (accounts remain in AWS)"
-echo ""
-read -rp "Type 'destroy' to confirm: " CONFIRM
-if [[ "$CONFIRM" != "destroy" ]]; then
-  echo "Aborted."
-  exit 0
+
+if [[ -n "$RESET" ]]; then
+  rm -f "$CHECKPOINT"
+  log_ok "Checkpoint cleared — starting from scratch"
 fi
 
-# ── Helper: destroy one environment ───────────────────────────────────────────
-destroy_env() {
-  local env="$1"
-  local dir="$ROOT_DIR/envs/$env"
+if [[ -f "$CHECKPOINT" ]]; then
+  log_warn "Resuming a previous shutdown run. Completed steps will be skipped."
+  show_progress
+fi
 
-  log_step "Destroying: $env"
-  cd "$dir"
+# ── Confirmation (only on first run, not on resume) ───────────────────────────
+if [[ ! -f "$CHECKPOINT" ]]; then
+  echo ""
+  log_warn "This will PERMANENTLY DESTROY:"
+  echo "    • All three EKS clusters (hub, dev, prod)"
+  echo "    • Transit Gateway + all VPC attachments and routes"
+  echo "    • All associated VPCs, IAM roles, and node groups"
+  echo "    • ArgoCD, Karpenter, and all in-cluster resources"
+  echo "    • hub / dev / prod Terraform state entries (accounts remain in AWS)"
+  echo ""
+  read -rp "Type 'destroy' to confirm: " CONFIRM
+  if [[ "$CONFIRM" != "destroy" ]]; then
+    echo "Aborted."
+    exit 0
+  fi
+  # Create the checkpoint file now so resume skips this prompt
+  touch "$CHECKPOINT"
+fi
+
+# ── Step 1: Destroy hub ───────────────────────────────────────────────────────
+destroy_hub() {
+  if step_done hub; then log_skip "Step 1 — Hub cluster"; return; fi
+  log_step "Step 1/3 — Destroying hub cluster (TGW, EKS, ArgoCD, Karpenter)"
+
+  cd "$ROOT_DIR/envs/hub"
   terraform init -reconfigure
   terraform destroy -auto-approve
-  log_ok "$env destroyed"
+
+  mark_done hub
+  log_ok "Hub destroyed"
 }
 
-# ── 1. Destroy hub ─────────────────────────────────────────────────────────────
-# Hub must go first: it owns the TGW and reads remote state from dev + prod.
-destroy_env hub
+# ── Step 2: Destroy dev + prod in parallel ─────────────────────────────────────
+destroy_spokes() {
+  if step_done spokes; then log_skip "Step 2 — Dev + prod clusters"; return; fi
+  log_step "Step 2/3 — Destroying dev and prod clusters (parallel)"
 
-# ── 2. Destroy dev + prod in parallel ─────────────────────────────────────────
-log_step "Step 2/3 — Destroying dev and prod clusters (parallel)"
+  local dev_log="$ROOT_DIR/.shutdown-dev.log"
+  local prod_log="$ROOT_DIR/.shutdown-prod.log"
+  : > "$dev_log"; : > "$prod_log"
+  echo "  Logs: $dev_log  |  $prod_log"
 
-dev_log="$ROOT_DIR/.shutdown-dev.log"
-prod_log="$ROOT_DIR/.shutdown-prod.log"
-: > "$dev_log"; : > "$prod_log"
-echo "  Logs: $dev_log  |  $prod_log"
+  (
+    cd "$ROOT_DIR/envs/dev"
+    terraform init -reconfigure >> "$dev_log" 2>&1
+    terraform destroy -auto-approve >> "$dev_log" 2>&1
+    echo "==> dev destroy complete" >> "$dev_log"
+  ) &
+  local dev_pid=$!
 
-(
-  cd "$ROOT_DIR/envs/dev"
-  terraform init -reconfigure >> "$dev_log" 2>&1
-  terraform destroy -auto-approve >> "$dev_log" 2>&1
-  echo "==> dev destroy complete" >> "$dev_log"
-) &
-dev_pid=$!
+  (
+    cd "$ROOT_DIR/envs/prod"
+    terraform init -reconfigure >> "$prod_log" 2>&1
+    terraform destroy -auto-approve >> "$prod_log" 2>&1
+    echo "==> prod destroy complete" >> "$prod_log"
+  ) &
+  local prod_pid=$!
 
-(
-  cd "$ROOT_DIR/envs/prod"
-  terraform init -reconfigure >> "$prod_log" 2>&1
-  terraform destroy -auto-approve >> "$prod_log" 2>&1
-  echo "==> prod destroy complete" >> "$prod_log"
-) &
-prod_pid=$!
+  echo "  Waiting for dev (PID $dev_pid) and prod (PID $prod_pid)..."
+  local dev_rc=0 prod_rc=0
+  wait "$dev_pid"  || dev_rc=$?
+  wait "$prod_pid" || prod_rc=$?
 
-echo "  Waiting for dev (PID $dev_pid) and prod (PID $prod_pid)..."
-dev_rc=0; prod_rc=0
-wait "$dev_pid"  || dev_rc=$?
-wait "$prod_pid" || prod_rc=$?
-
-if [[ $dev_rc -ne 0 ]]; then
-  log_err "Dev destroy failed — see $dev_log"
-  tail -30 "$dev_log" >&2
-  exit 1
-fi
-if [[ $prod_rc -ne 0 ]]; then
-  log_err "Prod destroy failed — see $prod_log"
-  tail -30 "$prod_log" >&2
-  exit 1
-fi
-log_ok "dev and prod clusters destroyed"
-
-# ── 3. Remove accounts from state ─────────────────────────────────────────────
-# This removes the aws_organizations_account resources from Terraform state.
-# It does NOT close or delete the AWS accounts (close_on_deletion = false).
-log_step "Step 3/3 — Removing accounts from Terraform state"
-cd "$ROOT_DIR/envs/accounts"
-terraform init -reconfigure
-terraform destroy -auto-approve
-log_ok "Accounts removed from state"
-
-echo ""
-log_warn "The hub / dev / prod AWS accounts still exist in AWS Organizations."
-echo "  To close them permanently, run:"
-echo "    aws organizations close-account --account-id <ACCOUNT_ID>"
-echo "  or use the AWS Organizations console."
-
-# ── Optional: destroy state backend ───────────────────────────────────────────
-echo ""
-read -rp "Also destroy the S3 state backend and DynamoDB table? [y/N] " yn
-if [[ "${yn,,}" == "y" ]]; then
-  log_warn "Destroying the state backend will make it impossible to recover any Terraform state."
-  read -rp "Are you sure? Type 'yes' to confirm: " CONFIRM2
-  if [[ "$CONFIRM2" == "yes" ]]; then
-    log_step "Destroying state backend (bootstrap)"
-    cd "$ROOT_DIR/bootstrap"
-    terraform init
-    # Force-empty the bucket first so Terraform can delete it
-    BUCKET=$(terraform output -raw state_bucket_name 2>/dev/null || true)
-    if [[ -n "$BUCKET" ]]; then
-      log_ok "Emptying bucket: $BUCKET"
-      aws s3 rm "s3://$BUCKET" --recursive
-      # Remove all versions and delete markers so versioned bucket can be destroyed
-      aws s3api list-object-versions --bucket "$BUCKET" --output json 2>/dev/null | \
-        jq -r '.Versions[]? | "\(.Key) \(.VersionId)"' | \
-        while read -r key ver; do
-          aws s3api delete-object --bucket "$BUCKET" --key "$key" --version-id "$ver" &>/dev/null
-        done
-      aws s3api list-object-versions --bucket "$BUCKET" --output json 2>/dev/null | \
-        jq -r '.DeleteMarkers[]? | "\(.Key) \(.VersionId)"' | \
-        while read -r key ver; do
-          aws s3api delete-object --bucket "$BUCKET" --key "$key" --version-id "$ver" &>/dev/null
-        done
-    fi
-    terraform destroy -auto-approve
-    log_ok "State backend destroyed"
-  else
-    log_ok "Skipping state backend destruction"
+  if [[ $dev_rc -ne 0 ]]; then
+    log_err "Dev destroy failed — see $dev_log"
+    tail -30 "$dev_log" >&2
+    exit 1
   fi
-else
-  log_ok "State backend preserved"
-  echo "    To remove it later: cd bootstrap && terraform destroy"
-fi
+  if [[ $prod_rc -ne 0 ]]; then
+    log_err "Prod destroy failed — see $prod_log"
+    tail -30 "$prod_log" >&2
+    exit 1
+  fi
+
+  mark_done spokes
+  log_ok "Dev and prod clusters destroyed"
+}
+
+# ── Step 3: Remove accounts from state ────────────────────────────────────────
+destroy_accounts() {
+  if step_done accounts; then log_skip "Step 3 — Accounts state"; return; fi
+  log_step "Step 3/3 — Removing accounts from Terraform state"
+
+  cd "$ROOT_DIR/envs/accounts"
+  terraform init -reconfigure
+  terraform destroy -auto-approve
+
+  mark_done accounts
+  log_ok "Accounts removed from state"
+
+  echo ""
+  log_warn "The hub / dev / prod AWS accounts still exist in AWS Organizations."
+  echo "  To close them permanently:"
+  echo "    aws organizations close-account --account-id <ACCOUNT_ID>"
+}
+
+# ── Optional step 4: Destroy state backend ────────────────────────────────────
+destroy_bootstrap() {
+  if step_done bootstrap; then log_skip "Step 4 — State backend (bootstrap)"; return; fi
+
+  echo ""
+  read -rp "Also destroy the S3 state backend and DynamoDB table? [y/N] " yn
+  if [[ "${yn,,}" != "y" ]]; then
+    log_ok "State backend preserved"
+    echo "    To remove it later: cd bootstrap && terraform destroy"
+    # Mark done so re-runs don't prompt again
+    mark_done bootstrap
+    return
+  fi
+
+  log_warn "Destroying the state backend makes Terraform state unrecoverable."
+  read -rp "Are you sure? Type 'yes' to confirm: " CONFIRM2
+  if [[ "$CONFIRM2" != "yes" ]]; then
+    log_ok "Skipping state backend destruction"
+    mark_done bootstrap
+    return
+  fi
+
+  log_step "Step 4 — Destroying state backend (S3 + DynamoDB)"
+  cd "$ROOT_DIR/bootstrap"
+  terraform init
+
+  BUCKET=$(terraform output -raw state_bucket_name 2>/dev/null || true)
+  if [[ -n "$BUCKET" ]]; then
+    log_ok "Emptying bucket: $BUCKET"
+    aws s3 rm "s3://$BUCKET" --recursive
+
+    # Remove all versions and delete markers so the versioned bucket can be deleted
+    aws s3api list-object-versions --bucket "$BUCKET" --output json 2>/dev/null | \
+      jq -r '.Versions[]? | "\(.Key) \(.VersionId)"' | \
+      while read -r key ver; do
+        aws s3api delete-object --bucket "$BUCKET" --key "$key" --version-id "$ver" &>/dev/null
+      done
+    aws s3api list-object-versions --bucket "$BUCKET" --output json 2>/dev/null | \
+      jq -r '.DeleteMarkers[]? | "\(.Key) \(.VersionId)"' | \
+      while read -r key ver; do
+        aws s3api delete-object --bucket "$BUCKET" --key "$key" --version-id "$ver" &>/dev/null
+      done
+  fi
+
+  terraform destroy -auto-approve
+
+  mark_done bootstrap
+  log_ok "State backend destroyed"
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+destroy_hub
+destroy_spokes
+destroy_accounts
+destroy_bootstrap
+
+# Clean up checkpoint on full success
+rm -f "$CHECKPOINT"
 
 echo ""
 log_ok "Shutdown complete."
