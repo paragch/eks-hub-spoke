@@ -26,11 +26,19 @@ Thumbs.db
 *.swp
 *.swo
 
-# Scripts output
-scripts/*.log
+# Scripts output — logs are written to repo root, not scripts/
+*.log
 
 # Script checkpoint files
 .startup-progress
 .apply-all-progress
 .teardown-progress
 .shutdown-progress
+
+# Terraform crash logs and local override files
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
