@@ -29,8 +29,59 @@ terraform {
   }
 }
 
+# Default provider — hub account.
+# Used by all existing hub resources (VPC, EKS, IAM, ArgoCD, Karpenter).
 provider "aws" {
   region = var.aws_region
+
+  assume_role {
+    role_arn = "arn:aws:iam::${var.hub_account_id}:role/OrganizationAccountAccessRole"
+  }
+
+  default_tags {
+    tags = var.common_tags
+  }
+}
+
+# Aliased hub provider — passed explicitly into the transit-gateway module.
+# Targets the same hub account as the default provider above.
+provider "aws" {
+  alias  = "hub"
+  region = var.aws_region
+
+  assume_role {
+    role_arn = "arn:aws:iam::${var.hub_account_id}:role/OrganizationAccountAccessRole"
+  }
+
+  default_tags {
+    tags = var.common_tags
+  }
+}
+
+# Dev spoke provider — used by transit-gateway module to create attachments
+# and routes in the dev account.
+provider "aws" {
+  alias  = "dev"
+  region = var.aws_region
+
+  assume_role {
+    role_arn = "arn:aws:iam::${var.dev_account_id}:role/OrganizationAccountAccessRole"
+  }
+
+  default_tags {
+    tags = var.common_tags
+  }
+}
+
+# Prod spoke provider — used by transit-gateway module to create attachments
+# and routes in the prod account.
+provider "aws" {
+  alias  = "prod"
+  region = var.aws_region
+
+  assume_role {
+    role_arn = "arn:aws:iam::${var.prod_account_id}:role/OrganizationAccountAccessRole"
+  }
 
   default_tags {
     tags = var.common_tags
@@ -44,7 +95,7 @@ provider "kubernetes" {
   exec {
     api_version = "client.authentication.k8s.io/v1beta1"
     command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.aws_region]
+    args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.aws_region, "--role-arn", "arn:aws:iam::${var.hub_account_id}:role/OrganizationAccountAccessRole"]
   }
 }
 
@@ -56,7 +107,7 @@ provider "helm" {
     exec {
       api_version = "client.authentication.k8s.io/v1beta1"
       command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.aws_region]
+      args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.aws_region, "--role-arn", "arn:aws:iam::${var.hub_account_id}:role/OrganizationAccountAccessRole"]
     }
   }
 }
@@ -69,6 +120,6 @@ provider "kubectl" {
   exec {
     api_version = "client.authentication.k8s.io/v1beta1"
     command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.aws_region]
+    args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.aws_region, "--role-arn", "arn:aws:iam::${var.hub_account_id}:role/OrganizationAccountAccessRole"]
   }
 }

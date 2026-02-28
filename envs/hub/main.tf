@@ -2,6 +2,19 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+# ── Remote state from accounts workspace ──────────────────────────────────────
+# Provides account IDs as a cross-reference. Note: providers.tf uses variables
+# for account IDs because provider configs cannot reference data sources.
+
+data "terraform_remote_state" "accounts" {
+  backend = "s3"
+  config = {
+    bucket = var.state_bucket
+    key    = "accounts/terraform.tfstate"
+    region = var.aws_region
+  }
+}
+
 # ── Remote state from dev spoke ───────────────────────────────────────────────
 
 data "terraform_remote_state" "dev" {
@@ -95,38 +108,43 @@ module "argocd" {
   depends_on = [module.eks]
 }
 
-# ── VPC Peering: hub ↔ dev ────────────────────────────────────────────────────
+# ── Transit Gateway ───────────────────────────────────────────────────────────
+# Replaces VPC peering. All cross-account TGW resources (attachments, routes,
+# RAM shares, SG rules) are created from this workspace using aliased providers.
 
-module "peering_hub_dev" {
-  source = "../../modules/vpc-peering"
+module "transit_gateway" {
+  source = "../../modules/transit-gateway"
 
-  peering_name             = "hub-to-dev"
-  requester_vpc_id         = module.vpc.vpc_id
-  requester_vpc_cidr       = module.vpc.vpc_cidr_block
-  requester_route_table_ids = module.vpc.private_route_table_ids
-  accepter_vpc_id          = data.terraform_remote_state.dev.outputs.vpc_id
-  accepter_vpc_cidr        = data.terraform_remote_state.dev.outputs.vpc_cidr
-  accepter_route_table_ids = data.terraform_remote_state.dev.outputs.private_route_table_ids
-  accepter_cluster_sg_id   = data.terraform_remote_state.dev.outputs.cluster_security_group_id
-  common_tags              = var.common_tags
+  providers = {
+    aws.hub  = aws.hub
+    aws.dev  = aws.dev
+    aws.prod = aws.prod
+  }
 
-  depends_on = [module.vpc]
-}
+  # Hub inputs
+  hub_vpc_id                  = module.vpc.vpc_id
+  hub_vpc_cidr                = module.vpc.vpc_cidr_block
+  hub_private_subnet_ids      = module.vpc.private_subnet_ids
+  hub_private_route_table_ids = module.vpc.private_route_table_ids
 
-# ── VPC Peering: hub ↔ prod ───────────────────────────────────────────────────
+  # Dev inputs (from dev remote state)
+  dev_vpc_id                  = data.terraform_remote_state.dev.outputs.vpc_id
+  dev_vpc_cidr                = data.terraform_remote_state.dev.outputs.vpc_cidr
+  dev_private_subnet_ids      = data.terraform_remote_state.dev.outputs.private_subnet_ids
+  dev_private_route_table_ids = data.terraform_remote_state.dev.outputs.private_route_table_ids
+  dev_cluster_sg_id           = data.terraform_remote_state.dev.outputs.cluster_security_group_id
 
-module "peering_hub_prod" {
-  source = "../../modules/vpc-peering"
+  # Prod inputs (from prod remote state)
+  prod_vpc_id                  = data.terraform_remote_state.prod.outputs.vpc_id
+  prod_vpc_cidr                = data.terraform_remote_state.prod.outputs.vpc_cidr
+  prod_private_subnet_ids      = data.terraform_remote_state.prod.outputs.private_subnet_ids
+  prod_private_route_table_ids = data.terraform_remote_state.prod.outputs.private_route_table_ids
+  prod_cluster_sg_id           = data.terraform_remote_state.prod.outputs.cluster_security_group_id
 
-  peering_name             = "hub-to-prod"
-  requester_vpc_id         = module.vpc.vpc_id
-  requester_vpc_cidr       = module.vpc.vpc_cidr_block
-  requester_route_table_ids = module.vpc.private_route_table_ids
-  accepter_vpc_id          = data.terraform_remote_state.prod.outputs.vpc_id
-  accepter_vpc_cidr        = data.terraform_remote_state.prod.outputs.vpc_cidr
-  accepter_route_table_ids = data.terraform_remote_state.prod.outputs.private_route_table_ids
-  accepter_cluster_sg_id   = data.terraform_remote_state.prod.outputs.cluster_security_group_id
-  common_tags              = var.common_tags
+  dev_account_id  = var.dev_account_id
+  prod_account_id = var.prod_account_id
+  aws_region      = var.aws_region
+  common_tags     = var.common_tags
 
   depends_on = [module.vpc]
 }
@@ -137,4 +155,21 @@ resource "time_sleep" "wait_for_argocd" {
   create_duration = "60s"
 
   depends_on = [module.argocd]
+}
+
+# ── Karpenter ─────────────────────────────────────────────────────────────────
+
+module "karpenter" {
+  source = "../../modules/karpenter"
+
+  cluster_name      = var.cluster_name
+  cluster_endpoint  = module.eks.cluster_endpoint
+  oidc_provider_arn = module.iam_oidc.oidc_provider_arn
+  oidc_provider_url = module.iam_oidc.oidc_provider_url
+  node_role_arn     = module.iam.node_role_arn
+  node_role_name    = module.iam.node_role_name
+  karpenter_version = var.karpenter_version
+  common_tags       = var.common_tags
+
+  depends_on = [module.iam_oidc]
 }

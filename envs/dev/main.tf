@@ -72,3 +72,20 @@ module "argocd" {
 
   depends_on = [module.eks]
 }
+
+# ── Karpenter ─────────────────────────────────────────────────────────────────
+
+module "karpenter" {
+  source = "../../modules/karpenter"
+
+  cluster_name      = var.cluster_name
+  cluster_endpoint  = module.eks.cluster_endpoint
+  oidc_provider_arn = module.iam_oidc.oidc_provider_arn
+  oidc_provider_url = module.iam_oidc.oidc_provider_url
+  node_role_arn     = module.iam.node_role_arn
+  node_role_name    = module.iam.node_role_name
+  karpenter_version = var.karpenter_version
+  common_tags       = var.common_tags
+
+  depends_on = [module.iam_oidc]
+}

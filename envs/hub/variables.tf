@@ -64,6 +64,27 @@ variable "argocd_chart_version" {
   default     = "7.8.26"
 }
 
+variable "karpenter_version" {
+  description = "Karpenter Helm chart version"
+  type        = string
+  default     = "1.3.3"
+}
+
+variable "hub_account_id" {
+  description = "AWS account ID for the hub member account"
+  type        = string
+}
+
+variable "dev_account_id" {
+  description = "AWS account ID for the dev member account"
+  type        = string
+}
+
+variable "prod_account_id" {
+  description = "AWS account ID for the prod member account"
+  type        = string
+}
+
 variable "common_tags" {
   description = "Common tags for all resources"
   type        = map(string)

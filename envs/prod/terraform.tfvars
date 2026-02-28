@@ -1,6 +1,9 @@
 aws_region   = "eu-west-2"
 cluster_name = "eks-prod"
 
+# Replace with the actual prod account ID from: terraform output -chdir=envs/accounts prod_account_id
+account_id = "REPLACE_WITH_PROD_ACCOUNT_ID"
+
 vpc_cidr             = "10.2.0.0/16"
 public_subnet_cidrs  = ["10.2.0.0/24", "10.2.1.0/24"]
 private_subnet_cidrs = ["10.2.10.0/24", "10.2.11.0/24"]

@@ -136,6 +136,7 @@ resource "aws_security_group" "node_group" {
   tags = merge(var.common_tags, {
     Name                                        = "${var.cluster_name}-node-sg"
     "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+    "karpenter.sh/discovery"                    = var.cluster_name
   })
 
   lifecycle {

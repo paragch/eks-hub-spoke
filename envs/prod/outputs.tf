@@ -33,6 +33,11 @@ output "cluster_security_group_id" {
   value       = module.eks.cluster_security_group_id
 }
 
+output "private_subnet_ids" {
+  description = "Private subnet IDs (needed by hub transit-gateway module)"
+  value       = module.vpc.private_subnet_ids
+}
+
 output "argocd_manager_token" {
   description = "argocd-manager SA token (sensitive)"
   value       = kubernetes_secret.argocd_manager_token.data["token"]
