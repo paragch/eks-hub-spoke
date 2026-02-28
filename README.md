@@ -1,6 +1,6 @@
 # EKS Hub-and-Spoke Infrastructure
 
-Five EKS clusters across five dedicated AWS accounts (plus one database-only account), connected by AWS Transit Gateway and managed by Terraform + ArgoCD GitOps.
+Four EKS clusters across five dedicated AWS accounts (including one database-only account), connected by AWS Transit Gateway and managed by Terraform + ArgoCD GitOps.
 
 > For a detailed breakdown of the internal architecture, provider wiring, network routing, and startup sequence see **[docs/low-level-design.md](docs/low-level-design.md)**.
 
@@ -246,18 +246,22 @@ Destroys hub → dev+prod+data (parallel) → accounts state. Saves progress to 
 eks-hub-spoke/
 ├── bootstrap/                # One-time: S3 bucket + DynamoDB lock table
 ├── modules/
-│   ├── vpc/                  # VPC, subnets, IGW, NAT gateways, route tables
-│   ├── eks-cluster/          # EKS cluster, managed node group, addons, KMS
-│   ├── iam/                  # Cluster/node roles + OIDC provider (two-phase)
-│   ├── argocd/               # Helm release for argo-cd 7.8.26; mode=hub|spoke
-│   ├── karpenter/            # Karpenter IRSA, Helm release, EC2NodeClass, NodePool
-│   ├── istio/                # Istio base + istiod + ingress gateway (Helm)
-│   ├── emr-on-eks/           # EMR virtual cluster, RBAC, Pod Identity, S3 landing zone, EKS access entry
-│   ├── transit-gateway/      # TGW, RAM share, cross-account attachments + routes
-│   ├── vpc-peering/          # (legacy — superseded by transit-gateway)
-│   ├── opensearch/           # Amazon OpenSearch domain (VPC, IAM access, AZ-aware)
-│   ├── aurora/               # Aurora PostgreSQL cluster + instances
-│   └── neptune/              # Amazon Neptune cluster + instances (IAM auth)
+│   ├── vpc/                          # VPC, subnets, IGW, NAT gateways, route tables
+│   ├── eks-cluster/                  # EKS cluster, managed node group, addons, KMS
+│   ├── iam/                          # Cluster/node roles + OIDC provider (two-phase)
+│   ├── argocd/                       # Helm release for argo-cd 7.8.26; mode=hub|spoke
+│   ├── karpenter/                    # Karpenter IRSA, Helm release, EC2NodeClass, NodePool
+│   ├── aws-load-balancer-controller/ # AWS LBC Pod Identity, Helm release (all four clusters)
+│   ├── istio/                        # Istio base + istiod + ingress gateway (Helm)
+│   ├── emr-on-eks/                   # EMR virtual cluster, RBAC, Pod Identity, S3 landing zone, EKS access entry
+│   ├── msk/                          # MSK Kafka cluster (Kafka 3.6.0, IAM/TLS, port 9098)
+│   ├── amazon-mq/                    # Amazon MQ ActiveMQ broker (ACTIVE_STANDBY_MULTI_AZ, AMQP+SSL)
+│   ├── jupyterhub/                   # JupyterHub PySpark notebook environment + NLB
+│   ├── transit-gateway/              # TGW, RAM share, cross-account attachments + routes
+│   ├── vpc-peering/                  # (legacy — superseded by transit-gateway)
+│   ├── opensearch/                   # Amazon OpenSearch domain (VPC, IAM access, AZ-aware)
+│   ├── aurora/                       # Aurora PostgreSQL cluster + instances
+│   └── neptune/                      # Amazon Neptune cluster + instances (IAM auth)
 ├── envs/
 │   ├── accounts/             # AWS Organizations member account provisioning
 │   ├── hub/                  # Hub EKS + ArgoCD Hub + Transit Gateway

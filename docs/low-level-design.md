@@ -22,7 +22,7 @@ This document describes the internal architecture of the eks-hub-spoke platform:
 
 ## 1. AWS Account Hierarchy
 
-The management account owns the AWS Organizations root. Four member accounts are provisioned by Terraform — one per cluster. The `OrganizationAccountAccessRole` is created automatically by Organizations in every new member account and is the single mechanism used for all cross-account access.
+The management account owns the AWS Organizations root. Five member accounts are provisioned by Terraform — four cluster accounts (hub, dev, prod, data) and one database-only account (prod-data). The `OrganizationAccountAccessRole` is created automatically by Organizations in every new member account and is the single mechanism used for all cross-account access.
 
 ```mermaid
 graph TD
@@ -380,6 +380,7 @@ sequenceDiagram
   participant DEV as Dev Account
   participant PROD as Prod Account
   participant DATA as Data Account
+  participant PRODDATA as Prod-Data Account
 
   U->>SH: ./scripts/startup.sh
 
@@ -388,19 +389,21 @@ sequenceDiagram
   MGMT-->>S3: create bucket + DynamoDB table
   SH->>SH: sed REPLACE_WITH_STATE_BUCKET → bucket name
 
-  Note over SH,MGMT: Step 2 — accounts
+  Note over SH,PRODDATA: Step 2 — accounts
   SH->>MGMT: terraform apply (envs/accounts/)
   MGMT-->>HUB: aws_organizations_account (hub)
   MGMT-->>DEV: aws_organizations_account (dev)
   MGMT-->>PROD: aws_organizations_account (prod)
   MGMT-->>DATA: aws_organizations_account (data)
+  MGMT-->>PRODDATA: aws_organizations_account (prod-data)
   SH->>SH: sed REPLACE_WITH_*_ACCOUNT_ID → account IDs
 
   Note over SH: Step 3 — wait_iam
-  SH->>HUB:  poll sts:AssumeRole (OrganizationAccountAccessRole)
-  SH->>DEV:  poll sts:AssumeRole (OrganizationAccountAccessRole)
-  SH->>PROD: poll sts:AssumeRole (OrganizationAccountAccessRole)
-  SH->>DATA: poll sts:AssumeRole (OrganizationAccountAccessRole)
+  SH->>HUB:      poll sts:AssumeRole (OrganizationAccountAccessRole)
+  SH->>DEV:      poll sts:AssumeRole (OrganizationAccountAccessRole)
+  SH->>PROD:     poll sts:AssumeRole (OrganizationAccountAccessRole)
+  SH->>DATA:     poll sts:AssumeRole (OrganizationAccountAccessRole)
+  SH->>PRODDATA: poll sts:AssumeRole (OrganizationAccountAccessRole)
 
   Note over SH,DATA: Step 4 — spokes (parallel)
   par
@@ -422,7 +425,19 @@ sequenceDiagram
   HUB->>DATA: create TGW attachment + routes + SG rule (aws.data)
   HUB-->>S3: write hub state
 
-  Note over SH,U: Step 6 — kubeconfig
+  Note over SH,PRODDATA: Step 6 — prod-data
+  SH->>PROD: terraform output cluster_endpoint + cluster_certificate_authority_data
+  PROD-->>SH: endpoint + CA data
+  SH->>SH: sed cluster endpoint/CA into envs/prod-data/terraform.tfvars
+  SH->>PRODDATA: assume role → terraform apply (envs/prod-data/)
+  PRODDATA->>S3: read prod remote state (VPC, MQ URL, cluster details)
+  PRODDATA->>PRODDATA: create VPC + OpenSearch + Aurora + Neptune
+  PRODDATA->>PROD: create VPC peering accepter + prod-side routes (aws.prod)
+  PRODDATA->>PROD: create db-writer IAM role + Pod Identity association (aws.prod)
+  PRODDATA->>PROD: create K8s namespace/SA/ConfigMap/Secrets/Deployment (kubernetes provider)
+  PRODDATA-->>S3: write prod-data state
+
+  Note over SH,U: Step 7 — kubeconfig
   SH->>U: aws eks update-kubeconfig (hub, dev, prod, data)
   U-->>U: contexts: hub · dev · prod · data ✓
 ```
@@ -751,9 +766,9 @@ Each orchestration script writes a checkpoint file to the repo root so that a fa
 
 | Script | Checkpoint file | Steps |
 |---|---|---|
-| `startup.sh` | `.startup-progress` | prereqs → bootstrap → accounts → wait_iam → spokes → hub → kubeconfig |
-| `apply-all.sh` | `.apply-all-progress` | accounts → spokes → hub |
-| `teardown.sh` | `.teardown-progress` | hub → spokes → accounts |
-| `shutdown.sh` | `.shutdown-progress` | hub → spokes → accounts → bootstrap |
+| `startup.sh` | `.startup-progress` | prereqs → bootstrap → accounts → wait_iam → spokes → hub → prod_data → kubeconfig |
+| `apply-all.sh` | `.apply-all-progress` | accounts → spokes → hub → prod_data |
+| `teardown.sh` | `.teardown-progress` | hub → prod_data → spokes → accounts |
+| `shutdown.sh` | `.shutdown-progress` | hub → prod_data → spokes → accounts → bootstrap |
 
 All four checkpoint files are listed in `.gitignore`.
