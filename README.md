@@ -167,6 +167,30 @@ kubectl --context hub get secret argocd-initial-admin-secret \
 
 Destroys hub → dev+prod (parallel) → accounts state. Prompts separately to remove the S3 backend. AWS accounts are **not** auto-closed (see note below).
 
+**Flags**
+
+| Flag | Effect |
+|---|---|
+| _(none)_ | Interactive — prompts `'destroy'` confirmation, then asks about the S3 backend at the end |
+| `--reset` | Clears the checkpoint file and starts from scratch |
+
+**Resume after failure**
+
+Progress is saved to `.shutdown-progress` after each step completes. Re-running resumes from the first incomplete step — the `'destroy'` confirmation is not shown again:
+
+```
+✓ hub
+○ spokes     ← resumes here
+○ accounts
+○ bootstrap
+```
+
+To force a full restart:
+
+```bash
+./scripts/shutdown.sh --reset
+```
+
 ### Clusters only (keep accounts and state backend)
 
 ```bash
