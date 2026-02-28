@@ -2,6 +2,8 @@
 
 Three EKS clusters across three dedicated AWS accounts, connected by AWS Transit Gateway and managed by Terraform + ArgoCD GitOps.
 
+> For a detailed breakdown of the internal architecture, provider wiring, network routing, and startup sequence see **[docs/low-level-design.md](docs/low-level-design.md)**.
+
 | Cluster | Name | Account | VPC CIDR | ArgoCD Mode | Node Type |
 |---|---|---|---|---|---|
 | Hub | `eks-hub` | hub account | `10.0.0.0/16` | HA (2 replicas, LoadBalancer) | t3.medium |
