@@ -19,6 +19,16 @@ variable "prod_account_email" {
   type        = string
 }
 
+variable "data_account_email" {
+  description = "Unique root email address for the data member account"
+  type        = string
+}
+
+variable "prod_data_account_email" {
+  description = "Unique root email address for the prod-data member account"
+  type        = string
+}
+
 variable "common_tags" {
   description = "Common tags applied to all created accounts"
   type        = map(string)

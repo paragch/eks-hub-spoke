@@ -23,18 +23,21 @@ tfvar() {
 AWS_REGION=$(tfvar "$ROOT_DIR/envs/hub/terraform.tfvars" aws_region)
 AWS_REGION="${AWS_REGION:-eu-west-2}"
 
-HUB_CLUSTER=$(tfvar "$ROOT_DIR/envs/hub/terraform.tfvars" cluster_name)
+HUB_CLUSTER=$(tfvar "$ROOT_DIR/envs/hub/terraform.tfvars"  cluster_name)
 DEV_CLUSTER=$(tfvar "$ROOT_DIR/envs/dev/terraform.tfvars"  cluster_name)
 PROD_CLUSTER=$(tfvar "$ROOT_DIR/envs/prod/terraform.tfvars" cluster_name)
+DATA_CLUSTER=$(tfvar "$ROOT_DIR/envs/data/terraform.tfvars" cluster_name)
 
 # ── Account IDs ───────────────────────────────────────────────────────────────
 HUB_ACCOUNT=$(tfvar "$ROOT_DIR/envs/hub/terraform.tfvars"  hub_account_id)
 DEV_ACCOUNT=$(tfvar "$ROOT_DIR/envs/dev/terraform.tfvars"   account_id)
 PROD_ACCOUNT=$(tfvar "$ROOT_DIR/envs/prod/terraform.tfvars" account_id)
+DATA_ACCOUNT=$(tfvar "$ROOT_DIR/envs/data/terraform.tfvars" account_id)
 
 if [[ -z "$HUB_ACCOUNT" || "$HUB_ACCOUNT" == *REPLACE* || \
       -z "$DEV_ACCOUNT" || "$DEV_ACCOUNT" == *REPLACE* || \
-      -z "$PROD_ACCOUNT" || "$PROD_ACCOUNT" == *REPLACE* ]]; then
+      -z "$PROD_ACCOUNT" || "$PROD_ACCOUNT" == *REPLACE* || \
+      -z "$DATA_ACCOUNT" || "$DATA_ACCOUNT" == *REPLACE* ]]; then
   echo "ERROR: account IDs are not yet set in terraform.tfvars files." >&2
   echo "       Run startup.sh first, or fill in the REPLACE_WITH_* placeholders." >&2
   exit 1
@@ -47,14 +50,16 @@ declare -A CLUSTERS=(
   ["$HUB_CLUSTER"]="$HUB_ACCOUNT"
   ["$DEV_CLUSTER"]="$DEV_ACCOUNT"
   ["$PROD_CLUSTER"]="$PROD_ACCOUNT"
+  ["$DATA_CLUSTER"]="$DATA_ACCOUNT"
 )
 declare -A ALIASES=(
   ["$HUB_CLUSTER"]="hub"
   ["$DEV_CLUSTER"]="dev"
   ["$PROD_CLUSTER"]="prod"
+  ["$DATA_CLUSTER"]="data"
 )
 
-for cluster in "$HUB_CLUSTER" "$DEV_CLUSTER" "$PROD_CLUSTER"; do
+for cluster in "$HUB_CLUSTER" "$DEV_CLUSTER" "$PROD_CLUSTER" "$DATA_CLUSTER"; do
   account="${CLUSTERS[$cluster]}"
   alias="${ALIASES[$cluster]}"
   role_arn="arn:aws:iam::${account}:${ROLE_SUFFIX}"

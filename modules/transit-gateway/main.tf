@@ -3,7 +3,7 @@ terraform {
     aws = {
       source                = "hashicorp/aws"
       version               = "~> 5.0"
-      configuration_aliases = [aws.hub, aws.dev, aws.prod]
+      configuration_aliases = [aws.hub, aws.dev, aws.prod, aws.data]
     }
     time = {
       source  = "hashicorp/time"
@@ -64,6 +64,13 @@ resource "aws_ram_principal_association" "prod" {
   principal          = var.prod_account_id
 }
 
+resource "aws_ram_principal_association" "data" {
+  provider = aws.hub
+
+  resource_share_arn = aws_ram_resource_share.tgw.arn
+  principal          = var.data_account_id
+}
+
 # RAM share propagation is eventually consistent.
 # Wait 30 s before creating cross-account attachments to avoid
 # TransitGatewayNotFound errors in the spoke accounts.
@@ -74,6 +81,7 @@ resource "time_sleep" "wait_for_ram_share" {
     aws_ram_resource_association.tgw,
     aws_ram_principal_association.dev,
     aws_ram_principal_association.prod,
+    aws_ram_principal_association.data,
   ]
 }
 
@@ -125,6 +133,22 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "prod" {
   depends_on = [time_sleep.wait_for_ram_share]
 }
 
+resource "aws_ec2_transit_gateway_vpc_attachment" "data" {
+  provider = aws.data
+
+  transit_gateway_id                              = aws_ec2_transit_gateway.main.id
+  vpc_id                                          = var.data_vpc_id
+  subnet_ids                                      = var.data_private_subnet_ids
+  transit_gateway_default_route_table_association = true
+  transit_gateway_default_route_table_propagation = true
+
+  tags = merge(var.common_tags, {
+    Name = "data-tgw-attachment"
+  })
+
+  depends_on = [time_sleep.wait_for_ram_share]
+}
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 # Hub → Dev (one route per private route table)
@@ -146,6 +170,18 @@ resource "aws_route" "hub_to_prod" {
 
   route_table_id         = var.hub_private_route_table_ids[count.index]
   destination_cidr_block = var.prod_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.hub]
+}
+
+# Hub → Data
+resource "aws_route" "hub_to_data" {
+  provider = aws.hub
+  count    = length(var.hub_private_route_table_ids)
+
+  route_table_id         = var.hub_private_route_table_ids[count.index]
+  destination_cidr_block = var.data_vpc_cidr
   transit_gateway_id     = aws_ec2_transit_gateway.main.id
 
   depends_on = [aws_ec2_transit_gateway_vpc_attachment.hub]
@@ -175,6 +211,18 @@ resource "aws_route" "prod_to_hub" {
   depends_on = [aws_ec2_transit_gateway_vpc_attachment.prod]
 }
 
+# Data → Hub
+resource "aws_route" "data_to_hub" {
+  provider = aws.data
+  count    = length(var.data_private_route_table_ids)
+
+  route_table_id         = var.data_private_route_table_ids[count.index]
+  destination_cidr_block = var.hub_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.data]
+}
+
 # ── Security group rules ──────────────────────────────────────────────────────
 # Allow ArgoCD on the hub to reach the spoke cluster API servers (port 443).
 # These replace the equivalent rules that were in the vpc-peering module.
@@ -201,4 +249,16 @@ resource "aws_security_group_rule" "allow_hub_to_prod_api" {
   protocol          = "tcp"
   cidr_blocks       = [var.hub_vpc_cidr]
   security_group_id = var.prod_cluster_sg_id
+}
+
+resource "aws_security_group_rule" "allow_hub_to_data_api" {
+  provider = aws.data
+
+  description       = "Allow hub VPC to reach data cluster API server (ArgoCD)"
+  type              = "ingress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = [var.hub_vpc_cidr]
+  security_group_id = var.data_cluster_sg_id
 }

@@ -70,6 +70,60 @@ variable "account_id" {
   type        = string
 }
 
+variable "virtual_cluster_name" {
+  description = "Name for the EMR virtual cluster (defaults to <cluster_name>-emr)"
+  type        = string
+  default     = ""
+}
+
+variable "lbc_chart_version" {
+  description = "AWS Load Balancer Controller Helm chart version"
+  type        = string
+  default     = "1.11.0"
+}
+
+variable "kafka_version" {
+  description = "Apache Kafka version for the MSK cluster"
+  type        = string
+  default     = "3.6.0"
+}
+
+variable "kafka_broker_instance_type" {
+  description = "MSK broker instance type"
+  type        = string
+  default     = "kafka.m5.large"
+}
+
+variable "jupyterhub_chart_version" {
+  description = "JupyterHub Helm chart version"
+  type        = string
+  default     = "4.1.0"
+}
+
+variable "mq_username" {
+  description = "Amazon MQ admin username"
+  type        = string
+  default     = "admin"
+}
+
+variable "mq_password" {
+  description = "Amazon MQ admin password (12–250 characters)"
+  type        = string
+  sensitive   = true
+}
+
+variable "mq_instance_type" {
+  description = "Amazon MQ broker instance type"
+  type        = string
+  default     = "mq.m5.large"
+}
+
+variable "mq_deployment_mode" {
+  description = "Amazon MQ deployment mode (ACTIVE_STANDBY_MULTI_AZ or SINGLE_INSTANCE)"
+  type        = string
+  default     = "ACTIVE_STANDBY_MULTI_AZ"
+}
+
 variable "common_tags" {
   description = "Common tags for all resources"
   type        = map(string)

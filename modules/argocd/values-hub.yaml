@@ -1,4 +1,6 @@
-# ArgoCD Hub values — HA mode with LoadBalancer
+# ArgoCD Hub values — HA mode with internet-facing NLB (AWS Load Balancer Controller)
+# Uses external NLB in IP target mode so the LBC manages the load balancer rather
+# than the legacy in-tree cloud provider.
 global:
   # Image tag is managed by chart version
   {}
@@ -8,8 +10,9 @@ server:
   service:
     type: LoadBalancer
     annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-type: "external"
       service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
   insecure: true
   extraArgs:
     - --insecure

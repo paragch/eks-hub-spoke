@@ -89,3 +89,29 @@ module "karpenter" {
 
   depends_on = [module.iam_oidc]
 }
+
+# ── AWS Load Balancer Controller ──────────────────────────────────────────────
+
+module "aws_load_balancer_controller" {
+  source = "../../modules/aws-load-balancer-controller"
+
+  cluster_name  = var.cluster_name
+  vpc_id        = module.vpc.vpc_id
+  account_id    = var.account_id
+  region        = var.aws_region
+  chart_version = var.lbc_chart_version
+  common_tags   = var.common_tags
+
+  depends_on = [module.eks]
+}
+
+# ── Istio ─────────────────────────────────────────────────────────────────────
+
+module "istio" {
+  source = "../../modules/istio"
+
+  cluster_name  = var.cluster_name
+  istio_version = var.istio_version
+
+  depends_on = [module.eks, module.aws_load_balancer_controller]
+}

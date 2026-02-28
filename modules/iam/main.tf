@@ -77,6 +77,12 @@ resource "aws_iam_role_policy_attachment" "node_ssm_policy" {
   role       = aws_iam_role.node_role[0].name
 }
 
+resource "aws_iam_role_policy_attachment" "node_ebs_csi_policy" {
+  count      = var.create_base_roles ? 1 : 0
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+  role       = aws_iam_role.node_role[0].name
+}
+
 # ── Phase 2: OIDC provider ───────────────────────────────────────────────────
 
 data "tls_certificate" "cluster_oidc" {

@@ -37,6 +37,17 @@ data "terraform_remote_state" "prod" {
   }
 }
 
+# ── Remote state from data spoke ──────────────────────────────────────────────
+
+data "terraform_remote_state" "data" {
+  backend = "s3"
+  config = {
+    bucket = var.state_bucket
+    key    = "data/terraform.tfstate"
+    region = var.aws_region
+  }
+}
+
 # ── Hub VPC ───────────────────────────────────────────────────────────────────
 
 module "vpc" {
@@ -119,6 +130,7 @@ module "transit_gateway" {
     aws.hub  = aws.hub
     aws.dev  = aws.dev
     aws.prod = aws.prod
+    aws.data = aws.data
   }
 
   # Hub inputs
@@ -141,8 +153,16 @@ module "transit_gateway" {
   prod_private_route_table_ids = data.terraform_remote_state.prod.outputs.private_route_table_ids
   prod_cluster_sg_id           = data.terraform_remote_state.prod.outputs.cluster_security_group_id
 
+  # Data inputs (from data remote state)
+  data_vpc_id                  = data.terraform_remote_state.data.outputs.vpc_id
+  data_vpc_cidr                = data.terraform_remote_state.data.outputs.vpc_cidr
+  data_private_subnet_ids      = data.terraform_remote_state.data.outputs.private_subnet_ids
+  data_private_route_table_ids = data.terraform_remote_state.data.outputs.private_route_table_ids
+  data_cluster_sg_id           = data.terraform_remote_state.data.outputs.cluster_security_group_id
+
   dev_account_id  = var.dev_account_id
   prod_account_id = var.prod_account_id
+  data_account_id = var.data_account_id
   aws_region      = var.aws_region
   common_tags     = var.common_tags
 
@@ -155,6 +175,24 @@ resource "time_sleep" "wait_for_argocd" {
   create_duration = "60s"
 
   depends_on = [module.argocd]
+}
+
+# ── AWS Load Balancer Controller ──────────────────────────────────────────────
+# Provisions NLBs (for ArgoCD, Istio) and ALBs (for app Ingress resources)
+# using Pod Identity. Must be ready before ArgoCD's LoadBalancer Service is
+# reconciled so the controller's webhook can annotate it correctly.
+
+module "aws_load_balancer_controller" {
+  source = "../../modules/aws-load-balancer-controller"
+
+  cluster_name  = var.cluster_name
+  vpc_id        = module.vpc.vpc_id
+  account_id    = var.hub_account_id
+  region        = var.aws_region
+  chart_version = var.lbc_chart_version
+  common_tags   = var.common_tags
+
+  depends_on = [module.eks]
 }
 
 # ── Karpenter ─────────────────────────────────────────────────────────────────

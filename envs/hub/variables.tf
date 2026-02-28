@@ -70,6 +70,12 @@ variable "karpenter_version" {
   default     = "1.3.3"
 }
 
+variable "lbc_chart_version" {
+  description = "AWS Load Balancer Controller Helm chart version"
+  type        = string
+  default     = "1.11.0"
+}
+
 variable "hub_account_id" {
   description = "AWS account ID for the hub member account"
   type        = string
@@ -82,6 +88,11 @@ variable "dev_account_id" {
 
 variable "prod_account_id" {
   description = "AWS account ID for the prod member account"
+  type        = string
+}
+
+variable "data_account_id" {
+  description = "AWS account ID for the data member account"
   type        = string
 }
 

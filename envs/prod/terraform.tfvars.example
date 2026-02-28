@@ -16,6 +16,10 @@ node_max_size        = 6
 
 argocd_chart_version = "7.8.26"
 
+# Amazon MQ credentials — change password before first apply (12–250 characters)
+mq_username = "admin"
+mq_password = "REPLACE_WITH_MQ_PASSWORD"
+
 common_tags = {
   Project     = "eks-hub-spoke"
   Environment = "prod"

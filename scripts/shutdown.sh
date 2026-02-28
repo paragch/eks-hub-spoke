@@ -4,9 +4,10 @@
 #   Steps
 #   ──────────────────────────────────────────────────────────
 #   1. hub        Destroy hub cluster (TGW, EKS, ArgoCD, Karpenter)
-#   2. spokes     Destroy dev + prod clusters in parallel
-#   3. accounts   Remove accounts from Terraform state
-#   4. bootstrap  (Optional) Destroy S3 state bucket + DynamoDB table
+#   2. prod-data  Destroy OpenSearch/Aurora/Neptune + db-writer + peering
+#   3. spokes     Destroy dev + prod + data clusters in parallel
+#   4. accounts   Remove accounts from Terraform state
+#   5. bootstrap  (Optional) Destroy S3 state bucket + DynamoDB table
 #   ──────────────────────────────────────────────────────────
 #
 #   Progress is written to .shutdown-progress in the repo root.
@@ -47,7 +48,7 @@ mark_done() { echo "$1" >> "$CHECKPOINT"; }
 
 # ── Print checkpoint status ────────────────────────────────────────────────────
 show_progress() {
-  local steps=("hub" "spokes" "accounts" "bootstrap")
+  local steps=("hub" "prod_data" "spokes" "accounts" "bootstrap")
   echo ""
   echo "  Checkpoint: $CHECKPOINT"
   for s in "${steps[@]}"; do
@@ -79,11 +80,12 @@ fi
 if [[ ! -f "$CHECKPOINT" ]]; then
   echo ""
   log_warn "This will PERMANENTLY DESTROY:"
-  echo "    • All three EKS clusters (hub, dev, prod)"
+  echo "    • All four EKS clusters (hub, dev, prod, data)"
+  echo "    • prod-data databases (OpenSearch, Aurora PostgreSQL, Neptune)"
   echo "    • Transit Gateway + all VPC attachments and routes"
   echo "    • All associated VPCs, IAM roles, and node groups"
   echo "    • ArgoCD, Karpenter, and all in-cluster resources"
-  echo "    • hub / dev / prod Terraform state entries (accounts remain in AWS)"
+  echo "    • hub / dev / prod / data / prod-data Terraform state entries (accounts remain in AWS)"
   echo ""
   read -rp "Type 'destroy' to confirm: " CONFIRM
   if [[ "$CONFIRM" != "destroy" ]]; then
@@ -97,7 +99,7 @@ fi
 # ── Step 1: Destroy hub ───────────────────────────────────────────────────────
 destroy_hub() {
   if step_done hub; then log_skip "Step 1 — Hub cluster"; return; fi
-  log_step "Step 1/3 — Destroying hub cluster (TGW, EKS, ArgoCD, Karpenter)"
+  log_step "Step 1/4 — Destroying hub cluster (TGW, EKS, ArgoCD, Karpenter)"
 
   cd "$ROOT_DIR/envs/hub"
   terraform init -reconfigure
@@ -107,15 +109,30 @@ destroy_hub() {
   log_ok "Hub destroyed"
 }
 
-# ── Step 2: Destroy dev + prod in parallel ─────────────────────────────────────
+# ── Step 2: Destroy prod-data ─────────────────────────────────────────────────
+# Must be destroyed before prod (peering connections reference prod VPC).
+destroy_prod_data() {
+  if step_done prod_data; then log_skip "Step 2 — prod-data databases + db-writer + peering"; return; fi
+  log_step "Step 2/4 — Destroying prod-data (OpenSearch/Aurora/Neptune + db-writer + VPC peering)"
+
+  cd "$ROOT_DIR/envs/prod-data"
+  terraform init -reconfigure
+  terraform destroy -auto-approve
+
+  mark_done prod_data
+  log_ok "prod-data destroyed"
+}
+
+# ── Step 3: Destroy dev + prod + data in parallel ─────────────────────────────
 destroy_spokes() {
-  if step_done spokes; then log_skip "Step 2 — Dev + prod clusters"; return; fi
-  log_step "Step 2/3 — Destroying dev and prod clusters (parallel)"
+  if step_done spokes; then log_skip "Step 3 — Dev + prod + data clusters"; return; fi
+  log_step "Step 3/4 — Destroying dev, prod, and data clusters (parallel)"
 
   local dev_log="$ROOT_DIR/.shutdown-dev.log"
   local prod_log="$ROOT_DIR/.shutdown-prod.log"
-  : > "$dev_log"; : > "$prod_log"
-  echo "  Logs: $dev_log  |  $prod_log"
+  local data_log="$ROOT_DIR/.shutdown-data.log"
+  : > "$dev_log"; : > "$prod_log"; : > "$data_log"
+  echo "  Logs: $dev_log  |  $prod_log  |  $data_log"
 
   (
     cd "$ROOT_DIR/envs/dev"
@@ -133,10 +150,19 @@ destroy_spokes() {
   ) &
   local prod_pid=$!
 
-  echo "  Waiting for dev (PID $dev_pid) and prod (PID $prod_pid)..."
-  local dev_rc=0 prod_rc=0
+  (
+    cd "$ROOT_DIR/envs/data"
+    terraform init -reconfigure >> "$data_log" 2>&1
+    terraform destroy -auto-approve >> "$data_log" 2>&1
+    echo "==> data destroy complete" >> "$data_log"
+  ) &
+  local data_pid=$!
+
+  echo "  Waiting for dev (PID $dev_pid), prod (PID $prod_pid), and data (PID $data_pid)..."
+  local dev_rc=0 prod_rc=0 data_rc=0
   wait "$dev_pid"  || dev_rc=$?
   wait "$prod_pid" || prod_rc=$?
+  wait "$data_pid" || data_rc=$?
 
   if [[ $dev_rc -ne 0 ]]; then
     log_err "Dev destroy failed — see $dev_log"
@@ -148,15 +174,20 @@ destroy_spokes() {
     tail -30 "$prod_log" >&2
     exit 1
   fi
+  if [[ $data_rc -ne 0 ]]; then
+    log_err "Data destroy failed — see $data_log"
+    tail -30 "$data_log" >&2
+    exit 1
+  fi
 
   mark_done spokes
-  log_ok "Dev and prod clusters destroyed"
+  log_ok "Dev, prod, and data clusters destroyed"
 }
 
-# ── Step 3: Remove accounts from state ────────────────────────────────────────
+# ── Step 4: Remove accounts from state ────────────────────────────────────────
 destroy_accounts() {
-  if step_done accounts; then log_skip "Step 3 — Accounts state"; return; fi
-  log_step "Step 3/3 — Removing accounts from Terraform state"
+  if step_done accounts; then log_skip "Step 4 — Accounts state"; return; fi
+  log_step "Step 4/4 — Removing accounts from Terraform state"
 
   cd "$ROOT_DIR/envs/accounts"
   terraform init -reconfigure
@@ -223,6 +254,7 @@ destroy_bootstrap() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 destroy_hub
+destroy_prod_data
 destroy_spokes
 destroy_accounts
 destroy_bootstrap

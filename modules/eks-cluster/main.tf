@@ -327,6 +327,28 @@ resource "aws_eks_node_group" "main" {
   }
 }
 
+# EBS CSI driver — required for PersistentVolumeClaims (JupyterHub notebooks,
+# Spark local storage, etc.). IAM permissions come from AmazonEBSCSIDriverPolicy
+# attached to the node role in the IAM module.
+
+data "aws_eks_addon_version" "ebs_csi" {
+  addon_name         = "aws-ebs-csi-driver"
+  kubernetes_version = var.kubernetes_version
+  most_recent        = true
+}
+
+resource "aws_eks_addon" "ebs_csi" {
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "aws-ebs-csi-driver"
+  addon_version               = data.aws_eks_addon_version.ebs_csi.version
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  depends_on = [aws_eks_node_group.main]
+
+  tags = merge(var.common_tags, { Name = "${var.cluster_name}-ebs-csi" })
+}
+
 # CoreDNS — requires nodes to be ready
 resource "aws_eks_addon" "coredns" {
   cluster_name                = aws_eks_cluster.main.name

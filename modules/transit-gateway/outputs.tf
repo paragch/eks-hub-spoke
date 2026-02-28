@@ -22,3 +22,8 @@ output "prod_attachment_id" {
   description = "TGW VPC attachment ID for the prod VPC"
   value       = aws_ec2_transit_gateway_vpc_attachment.prod.id
 }
+
+output "data_attachment_id" {
+  description = "TGW VPC attachment ID for the data VPC"
+  value       = aws_ec2_transit_gateway_vpc_attachment.data.id
+}

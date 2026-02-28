@@ -5,8 +5,9 @@
 #   Steps
 #   ──────────────────────────────────────────────────────────
 #   1. accounts   Apply accounts workspace (idempotent)
-#   2. spokes     Apply dev + prod clusters in parallel
+#   2. spokes     Apply dev + prod + data clusters in parallel
 #   3. hub        Apply hub cluster + Transit Gateway
+#   4. prod-data  Apply prod-data databases + db-writer microservice
 #   ──────────────────────────────────────────────────────────
 #
 #   Progress is written to .apply-all-progress in the repo root.
@@ -43,7 +44,7 @@ step_done() { [[ -f "$CHECKPOINT" ]] && grep -qx "$1" "$CHECKPOINT"; }
 mark_done() { echo "$1" >> "$CHECKPOINT"; }
 
 show_progress() {
-  local steps=("accounts" "spokes" "hub")
+  local steps=("accounts" "spokes" "hub" "prod_data")
   echo ""
   echo "  Checkpoint: $CHECKPOINT"
   for s in "${steps[@]}"; do
@@ -75,7 +76,7 @@ fi
 # ── Step 1: accounts ──────────────────────────────────────────────────────────
 apply_accounts() {
   if step_done accounts; then log_skip "Step 1 — accounts"; return; fi
-  log_step "Step 1/3 — Applying accounts"
+  log_step "Step 1/4 — Applying accounts"
 
   cd "$ROOT_DIR/envs/accounts"
   terraform init -reconfigure
@@ -87,15 +88,16 @@ apply_accounts() {
   log_ok "accounts applied"
 }
 
-# ── Step 2: dev + prod in parallel ────────────────────────────────────────────
+# ── Step 2: dev + prod + data in parallel ─────────────────────────────────────
 apply_spokes() {
-  if step_done spokes; then log_skip "Step 2 — Dev + prod clusters"; return; fi
-  log_step "Step 2/3 — Applying dev and prod clusters (parallel)"
+  if step_done spokes; then log_skip "Step 2 — Dev + prod + data clusters"; return; fi
+  log_step "Step 2/4 — Applying dev, prod, and data clusters (parallel)"
 
   local dev_log="$ROOT_DIR/.apply-dev.log"
   local prod_log="$ROOT_DIR/.apply-prod.log"
-  : > "$dev_log"; : > "$prod_log"
-  echo "  Logs: $dev_log  |  $prod_log"
+  local data_log="$ROOT_DIR/.apply-data.log"
+  : > "$dev_log"; : > "$prod_log"; : > "$data_log"
+  echo "  Logs: $dev_log  |  $prod_log  |  $data_log"
 
   (
     cd "$ROOT_DIR/envs/dev"
@@ -113,10 +115,19 @@ apply_spokes() {
   ) &
   local prod_pid=$!
 
-  echo "  Waiting for dev (PID $dev_pid) and prod (PID $prod_pid)..."
-  local dev_rc=0 prod_rc=0
+  (
+    cd "$ROOT_DIR/envs/data"
+    terraform init -reconfigure >> "$data_log" 2>&1
+    terraform apply -auto-approve >> "$data_log" 2>&1
+    echo "==> data apply complete" >> "$data_log"
+  ) &
+  local data_pid=$!
+
+  echo "  Waiting for dev (PID $dev_pid), prod (PID $prod_pid), and data (PID $data_pid)..."
+  local dev_rc=0 prod_rc=0 data_rc=0
   wait "$dev_pid"  || dev_rc=$?
   wait "$prod_pid" || prod_rc=$?
+  wait "$data_pid" || data_rc=$?
 
   if [[ $dev_rc -ne 0 ]]; then
     log_err "Dev apply failed — see $dev_log"; tail -30 "$dev_log" >&2; exit 1
@@ -124,15 +135,18 @@ apply_spokes() {
   if [[ $prod_rc -ne 0 ]]; then
     log_err "Prod apply failed — see $prod_log"; tail -30 "$prod_log" >&2; exit 1
   fi
+  if [[ $data_rc -ne 0 ]]; then
+    log_err "Data apply failed — see $data_log"; tail -30 "$data_log" >&2; exit 1
+  fi
 
   mark_done spokes
-  log_ok "dev and prod applied"
+  log_ok "dev, prod, and data applied"
 }
 
 # ── Step 3: hub ───────────────────────────────────────────────────────────────
 apply_hub() {
   if step_done hub; then log_skip "Step 3 — Hub cluster + Transit Gateway"; return; fi
-  log_step "Step 3/3 — Applying hub cluster + Transit Gateway"
+  log_step "Step 3/4 — Applying hub cluster + Transit Gateway"
 
   cd "$ROOT_DIR/envs/hub"
   terraform init -reconfigure
@@ -144,10 +158,48 @@ apply_hub() {
   log_ok "hub applied"
 }
 
+# ── Portable sed -i ────────────────────────────────────────────────────────────
+sed_inplace() {
+  local pattern="$1"; shift
+  if sed --version 2>&1 | grep -q GNU 2>/dev/null; then
+    sed -i "$pattern" "$@"
+  else
+    sed -i '' "$pattern" "$@"
+  fi
+}
+
+# ── Step 4: prod-data ─────────────────────────────────────────────────────────
+apply_prod_data() {
+  if step_done prod_data; then log_skip "Step 4 — prod-data (OpenSearch/Aurora/Neptune + db-writer)"; return; fi
+  log_step "Step 4/4 — Applying prod-data databases + db-writer microservice"
+
+  # Populate eks-prod cluster details into prod-data tfvars if still placeholder
+  local prod_tfvars="$ROOT_DIR/envs/prod-data/terraform.tfvars"
+  if grep -q 'REPLACE_WITH_PROD_CLUSTER_ENDPOINT' "$prod_tfvars" 2>/dev/null; then
+    cd "$ROOT_DIR/envs/prod"
+    terraform init -reconfigure -input=false > /dev/null 2>&1 || true
+    local prod_endpoint prod_ca
+    prod_endpoint=$(terraform output -raw cluster_endpoint 2>/dev/null || true)
+    prod_ca=$(terraform output -raw cluster_certificate_authority_data 2>/dev/null || true)
+    [[ -n "$prod_endpoint" ]] && sed_inplace "s|REPLACE_WITH_PROD_CLUSTER_ENDPOINT|${prod_endpoint}|g" "$prod_tfvars"
+    [[ -n "$prod_ca"       ]] && sed_inplace "s|REPLACE_WITH_PROD_CLUSTER_CA_DATA|${prod_ca}|g"       "$prod_tfvars"
+  fi
+
+  cd "$ROOT_DIR/envs/prod-data"
+  terraform init -reconfigure
+  terraform plan -out=tfplan
+  terraform apply tfplan
+  rm -f tfplan
+
+  mark_done prod_data
+  log_ok "prod-data applied"
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 apply_accounts
 apply_spokes
 apply_hub
+apply_prod_data
 
 rm -f "$CHECKPOINT"
 

@@ -74,6 +74,33 @@ variable "prod_cluster_sg_id" {
   type        = string
 }
 
+# ── Data VPC inputs ───────────────────────────────────────────────────────────
+
+variable "data_vpc_id" {
+  description = "VPC ID of the data cluster"
+  type        = string
+}
+
+variable "data_vpc_cidr" {
+  description = "CIDR block of the data VPC"
+  type        = string
+}
+
+variable "data_private_subnet_ids" {
+  description = "Private subnet IDs in the data VPC (used for TGW attachment)"
+  type        = list(string)
+}
+
+variable "data_private_route_table_ids" {
+  description = "Private route table IDs in the data VPC"
+  type        = list(string)
+}
+
+variable "data_cluster_sg_id" {
+  description = "Cluster security group ID in the data account (to allow hub API access)"
+  type        = string
+}
+
 # ── Cross-account identifiers ─────────────────────────────────────────────────
 
 variable "dev_account_id" {
@@ -83,6 +110,11 @@ variable "dev_account_id" {
 
 variable "prod_account_id" {
   description = "AWS account ID of the prod member account"
+  type        = string
+}
+
+variable "data_account_id" {
+  description = "AWS account ID of the data member account"
   type        = string
 }
 

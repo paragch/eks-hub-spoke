@@ -50,3 +50,35 @@ resource "aws_organizations_account" "prod" {
     Environment = "prod"
   })
 }
+
+# ── Data account ──────────────────────────────────────────────────────────────
+
+resource "aws_organizations_account" "data" {
+  name  = "eks-hub-spoke-data"
+  email = var.data_account_email
+
+  role_name = "OrganizationAccountAccessRole"
+
+  close_on_deletion = false
+
+  tags = merge(var.common_tags, {
+    Name        = "eks-hub-spoke-data"
+    Environment = "data"
+  })
+}
+
+# ── Prod-Data account ──────────────────────────────────────────────────────────
+
+resource "aws_organizations_account" "prod_data" {
+  name  = "eks-hub-spoke-prod-data"
+  email = var.prod_data_account_email
+
+  role_name = "OrganizationAccountAccessRole"
+
+  close_on_deletion = false
+
+  tags = merge(var.common_tags, {
+    Name        = "eks-hub-spoke-prod-data"
+    Environment = "prod-data"
+  })
+}

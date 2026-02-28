@@ -1,0 +1,32 @@
+aws_region      = "eu-west-2"
+account_id      = "REPLACE_WITH_PROD_DATA_ACCOUNT_ID"
+prod_account_id = "REPLACE_WITH_PROD_ACCOUNT_ID"
+
+# eks-prod cluster connection details — populate from prod workspace outputs:
+#   terraform output -chdir=envs/prod -raw cluster_endpoint
+#   terraform output -chdir=envs/prod -raw cluster_certificate_authority_data
+#   (cluster_name is eks-prod by default)
+prod_cluster_endpoint = "REPLACE_WITH_PROD_CLUSTER_ENDPOINT"
+prod_cluster_ca_data  = "REPLACE_WITH_PROD_CLUSTER_CA_DATA"
+prod_cluster_name     = "eks-prod"
+
+# State bucket — set by startup.sh after bootstrap
+state_bucket = "REPLACE_WITH_STATE_BUCKET"
+
+vpc_cidr             = "10.4.0.0/16"
+public_subnet_cidrs  = ["10.4.0.0/24", "10.4.1.0/24"]
+private_subnet_cidrs = ["10.4.10.0/24", "10.4.11.0/24"]
+
+aurora_db_name     = "proddata"
+aurora_db_username = "dbadmin"
+aurora_db_password = "REPLACE_WITH_AURORA_PASSWORD"
+
+mq_username     = "admin"
+mq_password     = "REPLACE_WITH_MQ_PASSWORD"
+db_writer_image = "REPLACE_WITH_DB_WRITER_IMAGE"
+
+common_tags = {
+  Project     = "eks-hub-spoke"
+  Environment = "prod-data"
+  ManagedBy   = "terraform"
+}

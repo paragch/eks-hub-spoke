@@ -70,6 +70,18 @@ variable "account_id" {
   type        = string
 }
 
+variable "istio_version" {
+  description = "Istio Helm chart version"
+  type        = string
+  default     = "1.24.3"
+}
+
+variable "lbc_chart_version" {
+  description = "AWS Load Balancer Controller Helm chart version"
+  type        = string
+  default     = "1.11.0"
+}
+
 variable "common_tags" {
   description = "Common tags for all resources"
   type        = map(string)

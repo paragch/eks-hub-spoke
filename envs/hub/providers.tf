@@ -88,6 +88,21 @@ provider "aws" {
   }
 }
 
+# Data spoke provider — used by transit-gateway module to create attachments
+# and routes in the data account.
+provider "aws" {
+  alias  = "data"
+  region = var.aws_region
+
+  assume_role {
+    role_arn = "arn:aws:iam::${var.data_account_id}:role/OrganizationAccountAccessRole"
+  }
+
+  default_tags {
+    tags = var.common_tags
+  }
+}
+
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
