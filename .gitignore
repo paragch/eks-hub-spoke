@@ -28,3 +28,9 @@ Thumbs.db
 
 # Scripts output
 scripts/*.log
+
+# Script checkpoint files
+.startup-progress
+.apply-all-progress
+.teardown-progress
+.shutdown-progress
