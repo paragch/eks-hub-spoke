@@ -268,9 +268,9 @@ flowchart LR
     SGDA["eks-data cluster SG\ningress 443 from 10.0.0.0/16\n(provider: aws.data)"]
   end
 
-  TGW_C -->|"ArgoCD → dev API server"| SGD
-  TGW_C -->|"ArgoCD → prod API server"| SGP
-  TGW_C -->|"ArgoCD → data API server"| SGDA
+  TGW_C -->|"ArgoCD → eks-dev :443"| SGD
+  TGW_C -->|"ArgoCD → eks-prod :443"| SGP
+  TGW_C -->|"ArgoCD → eks-data :443"| SGDA
 ```
 
 ### RAM share propagation
@@ -299,9 +299,9 @@ Hub ArgoCD is configured in HA mode (2 replicas). It holds Kubernetes cluster se
 sequenceDiagram
   participant GH as GitHub<br/>gitops/
   participant ARGOCD as ArgoCD Hub<br/>(eks-hub)
-  participant DEV_API as eks-dev<br/>API server
-  participant PROD_API as eks-prod<br/>API server
-  participant DATA_API as eks-data<br/>API server
+  participant DEV_API as eks-dev
+  participant PROD_API as eks-prod
+  participant DATA_API as eks-data
 
   GH-->>ARGOCD: poll / webhook (ApplicationSet controllers)
 

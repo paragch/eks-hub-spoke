@@ -40,7 +40,7 @@ GitOps (Hub ArgoCD)
   └── spoke-apps ApplicationSet → gitops/apps/{env}/* to matching spoke
 ```
 
-VPCs are connected via AWS Transit Gateway. The TGW lives in the hub account and is shared to dev and prod via AWS RAM. All cross-account attachments, routes, and cluster security group rules (port 443 for ArgoCD → API server) are managed from the hub workspace using aliased Terraform providers.
+VPCs are connected via AWS Transit Gateway. The TGW lives in the hub account and is shared to dev and prod via AWS RAM. All cross-account attachments, routes, and cluster security group rules (port 443 from hub VPC to each spoke cluster) are managed from the hub workspace using aliased Terraform providers.
 
 ## Prerequisites
 
