@@ -93,3 +93,8 @@ output "mq_console_url" {
   description = "Amazon MQ ActiveMQ web console URL (accessible from within the VPC only)"
   value       = module.amazon_mq.console_url
 }
+
+output "mq_stomp_failover_url" {
+  description = "Amazon MQ STOMP+SSL failover URL for client configuration (port 61614)"
+  value       = module.amazon_mq.stomp_failover_url
+}

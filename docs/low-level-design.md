@@ -17,6 +17,7 @@ This document describes the internal architecture of the eks-hub-spoke platform:
 9. [Amazon MQ — Kafka-to-Message-Broker Bridge](#9-amazon-mq--kafka-to-message-broker-bridge)
 10. [End-to-End Data Flow](#10-end-to-end-data-flow)
 11. [Prod-Data — Isolated Analytics Store](#11-prod-data--isolated-analytics-store)
+12. [HR Seed Data Pipeline](#12-hr-seed-data-pipeline)
 
 ---
 
@@ -155,9 +156,9 @@ graph TB
     PROD_PRI["Private Subnets<br/>10.2.10.0/24, 10.2.11.0/24"]
     PROD_EKS["eks-prod (EMR on EKS)"]
     PROD_MSK["MSK Kafka<br/>port 9098 IAM/TLS"]
-    PROD_MQ["Amazon MQ (ActiveMQ)<br/>ACTIVE_STANDBY_MULTI_AZ<br/>port 5671 AMQP+SSL"]
+    PROD_MQ["Amazon MQ (ActiveMQ)<br/>ACTIVE_STANDBY_MULTI_AZ<br/>AMQP+SSL :5671 · STOMP+SSL :61614"]
     PROD_EKS -->|"Spark writes results"| PROD_MSK
-    PROD_MSK -->|"Kafka consumer bridge<br/>(EKS pod)"| PROD_MQ
+    PROD_MSK -->|"kafka-mq-bridge<br/>(EKS Deployment, STOMP+SSL)"| PROD_MQ
   end
 
   subgraph prod_data_acc["Prod-Data Account · 10.4.0.0/16"]
@@ -387,7 +388,10 @@ spark-history-server pod (emr-jobs ns)
 
 ### Architecture
 
-Amazon MQ (ActiveMQ) broker is deployed in the **prod** account, co-located in the same VPC as the MSK cluster. A lightweight Kafka consumer bridge application (a Kubernetes Deployment running in the EKS cluster) reads from MSK topics using IAM/TLS authentication and republishes messages to Amazon MQ queues and topics via AMQP (port 5671).
+Amazon MQ (ActiveMQ) broker is deployed in the **prod** account, co-located in the same VPC as the MSK cluster. Two EKS Deployments interact with it:
+
+- **`kafka-mq-bridge`** (in `emr-jobs` namespace, `emr-job-runner` SA) — reads from MSK topics via IAM SASL (OAUTHBEARER, port 9098) and publishes to Amazon MQ topics via **STOMP+SSL (port 61614)**, in transactional batches of 10 messages.
+- **`db-writer`** (in `db-writer` namespace, `db-writer` SA) — subscribes from Amazon MQ via **STOMP+SSL (port 61614)** with `client-individual` ACK mode and fans out each event to OpenSearch, Aurora, and Neptune.
 
 The hub cluster can consume from Amazon MQ in prod over the private network via Transit Gateway — no internet exposure, no additional IAM policy changes required beyond the TGW routing that already exists.
 
@@ -403,8 +407,8 @@ sequenceDiagram
   Note over BRIDGE: Kafka consumer loop
   BRIDGE->>MSK:  poll(topic)<br/>IAM auth via Pod Identity
   MSK-->>BRIDGE: records batch
-  BRIDGE->>MQ:   send(queue/topic)<br/>AMQP+SSL username/password
-  MQ-->>HUB:     consume(queue/topic)<br/>AMQP port 5671 via TGW
+  BRIDGE->>MQ:   send(/topic/hr.events)<br/>STOMP+SSL :61614 username/password<br/>(transactional batch of 10)
+  MQ-->>HUB:     consume(queue/topic)<br/>AMQP+SSL :5671 via TGW
 ```
 
 ### Amazon MQ broker properties
@@ -416,7 +420,8 @@ sequenceDiagram
 | Instance type | `mq.m5.large` (configurable via `mq_instance_type`) |
 | Network placement | Private subnets of the prod VPC |
 | Publicly accessible | `false` — reachable only via private IP |
-| Client protocol | AMQP+SSL (port 5671) — used by cross-account consumers |
+| Python microservices | STOMP+SSL (port 61614) — `kafka-mq-bridge` (producer) and `db-writer` (consumer) |
+| Cross-account consumers | AMQP+SSL (port 5671) — hub account consumers via Transit Gateway |
 | Java/JMS clients | OpenWire+SSL (port 61617) |
 | Web console | Port 8162 (HTTPS) — restricted to local VPC CIDR only |
 | Authentication | Username/password (`mq_username` / `mq_password` sensitive variable) |
@@ -435,13 +440,20 @@ Prod   10.2.0.0/16 ──┘  Transit Gateway  ──►  Amazon MQ (prod)  10.2
 
 For ACTIVE_STANDBY_MULTI_AZ deployments, clients should use the failover URL output by Terraform to automatically reconnect on broker failover:
 
+**AMQP+SSL** (cross-account consumers via Transit Gateway):
 ```
 failover:(amqp+ssl://<primary>:5671,amqp+ssl://<standby>:5671)?maxReconnectAttempts=10
 ```
 
+**STOMP+SSL** (`kafka-mq-bridge` and `db-writer` within the prod VPC):
+```
+failover:(stomp+ssl://<primary>:61614,stomp+ssl://<standby>:61614)?maxReconnectAttempts=10
+```
+
 Retrieve after apply:
 ```bash
-terraform output -chdir=envs/prod mq_amqp_failover_url
+terraform output -chdir=envs/prod mq_amqp_failover_url   # AMQP+SSL — hub account consumers
+terraform output -chdir=envs/prod mq_stomp_failover_url   # STOMP+SSL — kafka-mq-bridge and db-writer
 ```
 
 ---
@@ -486,7 +498,7 @@ sequenceDiagram
   Note over BRIDGE: continuous consumer loop<br/>(Pod Identity → emr-job-runner role)
   BRIDGE->>MSK: kafka-cluster:ReadData<br/>poll(topic="results", SASL_SSL :9098)
   MSK-->>BRIDGE: records batch
-  BRIDGE->>MQ: send(destination, AMQP+SSL :5671)<br/>username/password auth
+  BRIDGE->>MQ: send(/topic/hr.events)<br/>STOMP+SSL :61614 username/password<br/>(transactional batch of 10)
 
   par Consumers via TGW and local
     MQ-->>HUB: deliver(queue/topic)<br/>AMQP+SSL :5671, 10.0.x.x via TGW
@@ -495,7 +507,7 @@ sequenceDiagram
   end
 
   Note over DBWRITER: db-writer pod (eks-prod, db-writer ns)<br/>Pod Identity → db-writer IAM role
-  DBWRITER->>MQ: consume(queue/topic)<br/>AMQP+SSL :5671 (local in prod VPC)
+  DBWRITER->>MQ: subscribe(/topic/hr.events)<br/>STOMP+SSL :61614 ack=client-individual
   DBWRITER->>OS: PUT /index/_doc<br/>HTTPS :443 via VPC peering → prod-data
   DBWRITER->>AURORA: INSERT INTO table<br/>PostgreSQL :5432 via VPC peering → prod-data
   DBWRITER->>NEPTUNE: g.addV()<br/>Gremlin WSS :8182 via VPC peering → prod-data
@@ -512,10 +524,11 @@ sequenceDiagram
 | JupyterHub single-user pod | prod | `jupyterhub` | Pod Identity → `emr-job-runner` role | S3 (HTTPS), EMR Containers API (HTTPS) |
 | Spark driver pod | prod | `emr-jobs` | Pod Identity → `emr-job-runner` role | S3 (HTTPS), MSK SASL_SSL :9098 |
 | Spark executor pods | prod | `emr-jobs` | Pod Identity → `emr-job-runner` role | S3 (HTTPS), MSK SASL_SSL :9098 |
-| Kafka–MQ Bridge | prod | `emr-jobs` | Pod Identity → `emr-job-runner` role | MSK SASL_SSL :9098 → MQ AMQP+SSL :5671 |
+| Kafka–MQ Bridge | prod | `emr-jobs` | Pod Identity → `emr-job-runner` role | MSK SASL_SSL :9098 (OAUTHBEARER/IAM) → MQ STOMP+SSL :61614 |
 | Spark History Server | prod | `emr-jobs` | Pod Identity → `emr-job-runner` role | S3 (HTTPS read), serves :18080 |
 | Amazon MQ broker | prod | — (managed service) | username/password | AMQP+SSL :5671, OpenWire+SSL :61617 |
-| Amazon MQ consumers | hub, prod | any | username/password | AMQP+SSL :5671 via Transit Gateway |
+| Amazon MQ consumers (hub) | hub | any | username/password | AMQP+SSL :5671 via Transit Gateway |
+| db-writer | prod | `db-writer` | Pod Identity → `db-writer` role | MQ STOMP+SSL :61614 → OS/Aurora/Neptune via VPC peering |
 
 ### IAM permissions on the shared `emr-job-runner` role
 
@@ -542,7 +555,7 @@ All data-plane components (Spark pods, JupyterHub pods, Kafka bridge, Spark Hist
   │             Bridge pod       │
   │                  │          │
   │                  ▼          │
-  │           Amazon MQ :5671   │
+  │           Amazon MQ :61614  │
   │                  │          │
   │             db-writer pod   │
   └──────────────┬──────────────┘
@@ -587,6 +600,16 @@ Isolation: prod-data is not reachable from hub account.
 | Aurora PostgreSQL | 5432 | Password (Kubernetes Secret in db-writer ns) | Relational store for structured event records |
 | Amazon Neptune | 8182 (Gremlin WSS) | IAM (`neptune-db:*`) via db-writer role | Graph database for entity relationship data |
 
+### kafka-mq-bridge (prod-data workspace managed)
+
+The `kafka-mq-bridge` Deployment is also provisioned by the prod-data workspace (it runs on `eks-prod`, like db-writer). It reuses the existing `emr-job-runner` ServiceAccount — no new IAM role or Pod Identity association is needed.
+
+| Resource | Namespace | Details |
+|---|---|---|
+| `kubernetes_config_map.bridge_config` | `emr-jobs` | `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPIC=hr-events`, `MQ_STOMP_URL`, `MQ_DESTINATION=/topic/hr.events` |
+| `kubernetes_secret.bridge_mq_credentials` | `emr-jobs` | `MQ_PASSWORD` |
+| `kubernetes_deployment.kafka_mq_bridge` | `emr-jobs` | image from `var.kafka_mq_bridge_image`; SA = `emr-job-runner` |
+
 ### Provider wiring (prod-data workspace)
 
 ```mermaid
@@ -598,7 +621,7 @@ graph LR
   end
 
   subgraph state["Remote state"]
-    RS_PROD["data.terraform_remote_state.prod<br/>reads: cluster_endpoint, cluster_certificate_authority_data,<br/>cluster_name, vpc_id, vpc_cidr,<br/>private_route_table_ids, mq_amqp_failover_url"]
+    RS_PROD["data.terraform_remote_state.prod<br/>reads: cluster_endpoint, cluster_certificate_authority_data,<br/>cluster_name, vpc_id, vpc_cidr, private_route_table_ids,<br/>mq_amqp_failover_url, mq_stomp_failover_url,<br/>msk_bootstrap_brokers_iam"]
   end
 
   RS_PROD --> P_K8S
@@ -617,7 +640,7 @@ sequenceDiagram
   participant NEPTUNE  as Neptune<br/>(prod-data, Gremlin WSS :8182)
 
   Note over DBWRITER: continuous consumer loop
-  DBWRITER->>MQ: consume(queue/topic)<br/>AMQP+SSL :5671 (local, no TGW needed)
+  DBWRITER->>MQ: subscribe(/topic/hr.events)<br/>STOMP+SSL :61614 ack=client-individual
   MQ-->>DBWRITER: message batch
 
   par Write to all three databases
@@ -649,3 +672,151 @@ Each orchestration script writes a checkpoint file to the repo root so that a fa
 | `shutdown.sh` | `.shutdown-progress` | hub → prod_data → prod → accounts → bootstrap |
 
 All four checkpoint files are listed in `.gitignore`.
+
+---
+
+## 12. HR Seed Data Pipeline
+
+This section describes the HR Seed Data Pipeline — a concrete end-to-end batch pipeline that seeds HR employee event records through the platform, exercising every component from S3 through to the three databases in prod-data.
+
+### Pipeline flow
+
+```
+S3 (seed-data/hr_employees.jsonl — 50 records)
+  └─ EMR Spark batch job (hr_events_producer.py)
+       └─ MSK Kafka topic: hr-events
+            └─ kafka-mq-bridge Deployment (emr-jobs ns, emr-job-runner SA)
+                 └─ Amazon MQ /topic/hr.events (STOMP+SSL :61614)
+                      └─ db-writer Deployment (db-writer ns, db-writer SA)
+                           ├─ OpenSearch: hr-employees index (upsert on employee_id)
+                           ├─ Aurora PostgreSQL: employees + performance_reviews tables
+                           └─ Neptune: Employee vertices, REPORTS_TO + HAS_SKILL edges
+```
+
+### Seed data
+
+`pipeline/seed-data/hr_employees.jsonl` — 50 JSONL records: 10 employees × 5 event types (`new_hire`, `skills_update`, `transfer`, `promotion`, `performance_review`). Departments: Engineering, Data Science, Product, HR, Finance. Timestamps span 2021–2024 to represent realistic career progressions.
+
+The file is uploaded to S3 by `aws_s3_object.hr_seed_data` in `envs/prod/main.tf` (keyed `seed-data/hr_employees.jsonl` in the EMR landing zone bucket).
+
+### Spark job (`hr_events_producer.py`)
+
+`pipeline/spark-jobs/hr_events_producer.py` — PySpark batch job that:
+1. Reads the JSONL from `s3://<landing-zone>/seed-data/hr_employees.jsonl`
+2. Serialises each row with `to_json(struct(*))` so each Kafka message is a self-contained JSON string
+3. Writes to topic `hr-events` using `df.write.format("kafka")` — terminates after all 50 records are sent
+
+Key Spark config properties (set via `--conf` in the EMR job submission):
+
+| Spark conf | Purpose |
+|---|---|
+| `spark.kafka.bootstrap.servers` | MSK IAM bootstrap brokers (port 9098) |
+| `spark.hr.input.path` | S3 URI of the seed data JSONL |
+| `spark.jars` | S3 URI of `aws-msk-iam-auth-2.2.0-all.jar` |
+
+MSK IAM auth is provided by `software.amazon.msk.auth.iam.IAMLoginModule` (the JAR on the executor classpath). The Spark executor inherits the `emr-job-runner` IAM credentials via Pod Identity.
+
+The script is uploaded to S3 by `aws_s3_object.hr_spark_job` in `envs/prod/main.tf`.
+
+### `kafka-mq-bridge` microservice
+
+`pipeline/kafka-mq-bridge/bridge.py` — Python service using `confluent-kafka` + `stomp.py`:
+
+- **MSK consumer**: `SASL_SSL` / `OAUTHBEARER` mechanism; token refreshed by `aws-msk-iam-sasl-signer-python` via the `oauth_cb` callback — credentials come from Pod Identity on `emr-job-runner` SA
+- **Topic bootstrap**: `AdminClient.create_topics()` on startup if `hr-events` does not yet exist
+- **STOMP publisher**: connects to Amazon MQ using a parsed `failover:(stomp+ssl://...)` URL; each batch of 10 Kafka messages is wrapped in a single STOMP transaction (`BEGIN` / `SEND` × 10 / `COMMIT`); Kafka offsets are committed only after the STOMP transaction commits
+- **Graceful shutdown**: partial batch is flushed before the consumer closes
+
+### `db-writer` microservice
+
+`pipeline/db-writer/writer.py` — Python service using `stomp.py` + `opensearch-py` + `psycopg2` + `gremlinpython`:
+
+- **STOMP subscriber**: `client-individual` ACK mode (at-least-once); each message is ACKed individually only after all three writes succeed; failed messages are NACKed for redelivery
+- **OpenSearch**: `AWS4Auth` (SigV4) via `requests-aws4auth`; `index` call upserts on `employee_id` as the doc ID
+- **Aurora**: `psycopg2` + `INSERT ... ON CONFLICT DO UPDATE` on `employees` (keyed on `employee_id`) and `performance_reviews` (keyed on `event_id`)
+- **Neptune**: `gremlinpython` + SigV4 headers injected into the WebSocket upgrade request; vertices and edges upserted with the `coalesce(unfold(), addV/addE)` pattern
+
+| Store | Table / Index | Upsert key |
+|---|---|---|
+| OpenSearch `hr-employees` | `_doc` | `employee_id` |
+| Aurora `employees` | `employees` | `employee_id` |
+| Aurora `performance_reviews` | `performance_reviews` | `event_id` |
+| Neptune | `Employee` vertex | `employee_id` property |
+| Neptune | `REPORTS_TO` edge | `(employee_id, manager_id)` pair |
+| Neptune | `HAS_SKILL` edge | `(employee_id, skill_name)` pair |
+
+### `run-pipeline.sh`
+
+`scripts/run-pipeline.sh` orchestrates a full pipeline run end-to-end:
+
+1. Downloads `aws-msk-iam-auth-2.2.0-all.jar` from Maven Central to `/tmp/` (cached on re-run)
+2. Uploads the JAR, seed data JSONL, and PySpark script to S3 (belt-and-suspenders over Terraform — idempotent)
+3. Reads `emr_virtual_cluster_id`, `emr_job_execution_role_arn`, `emr_landing_zone_bucket_name`, and `msk_bootstrap_brokers_iam` from `terraform output -chdir=envs/prod`
+4. Submits an EMR on EKS job run via `aws emr-containers start-job-run`
+5. Polls `aws emr-containers describe-job-run` every 30 s until the state is `COMPLETED` or `FAILED` (30 min timeout)
+6. Prints the CloudWatch log group and S3 log URI on exit
+
+### HR pipeline sequence
+
+```mermaid
+sequenceDiagram
+  participant SCRIPT   as run-pipeline.sh
+  participant S3       as S3 Landing Zone
+  participant EMRAPI   as EMR Containers API
+  participant SPARK    as Spark (emr-job-runner SA)
+  participant MSK      as MSK Kafka (hr-events)
+  participant BRIDGE   as kafka-mq-bridge pod
+  participant MQ       as Amazon MQ (/topic/hr.events)
+  participant DBWRITER as db-writer pod
+  participant OS       as OpenSearch (hr-employees)
+  participant AURORA   as Aurora PostgreSQL
+  participant NEPTUNE  as Neptune
+
+  SCRIPT->>S3: upload JAR + seed data + spark script
+  SCRIPT->>EMRAPI: start-job-run (hr_events_producer.py)
+  EMRAPI->>SPARK: schedule Spark driver (emr-job-runner SA, Pod Identity)
+  SPARK->>S3: read hr_employees.jsonl (50 records)
+  SPARK->>MSK: produce 50 JSON records → hr-events (SASL_SSL IAM)
+
+  Note over BRIDGE: continuous consumer loop (already running)
+  BRIDGE->>MSK: poll(hr-events, SASL_SSL OAUTHBEARER/IAM)
+  MSK-->>BRIDGE: 50 records in batches
+  BRIDGE->>MQ: STOMP+SSL :61614 — 5 transactions × 10 messages
+
+  Note over DBWRITER: STOMP client-individual ACK
+  MQ-->>DBWRITER: deliver /topic/hr.events messages
+  loop per HR event
+    DBWRITER->>OS: index upsert (employee_id as doc ID)
+    DBWRITER->>AURORA: INSERT employees ON CONFLICT DO UPDATE
+    DBWRITER->>AURORA: INSERT performance_reviews (event_type=performance_review only)
+    DBWRITER->>NEPTUNE: coalesce upsert Employee vertex + REPORTS_TO + HAS_SKILL edges
+    DBWRITER->>MQ: ACK message-id
+  end
+```
+
+### Verification commands
+
+```bash
+# 1. Run the pipeline
+./scripts/run-pipeline.sh
+
+# 2. Confirm kafka-mq-bridge is running
+kubectl --context prod get pods -n emr-jobs -l app=kafka-mq-bridge
+
+# 3. Confirm db-writer is running
+kubectl --context prod get pods -n db-writer
+
+# 4. Count documents in OpenSearch
+curl -X GET "https://<opensearch-endpoint>/hr-employees/_count" \
+  --aws-sigv4 "aws:amz:eu-west-2:es"
+# Expected: {"count":10,...}
+
+# 5. Count rows in Aurora
+psql -h <aurora-endpoint> -U dbadmin -d proddata \
+  -c "SELECT COUNT(*) FROM employees;"
+# Expected: 10
+
+# 6. Count Employee vertices in Neptune (Gremlin console)
+# g.V().hasLabel('Employee').count()
+# Expected: 10 (plus EMP000 stub)
+```

@@ -243,8 +243,9 @@ resource "kubernetes_config_map" "db_endpoints" {
     AURORA_PORT         = "5432"
     AURORA_DB_NAME      = var.aurora_db_name
     AURORA_USERNAME     = var.aurora_db_username
-    # Amazon MQ failover URL read from prod remote state
+    # Amazon MQ failover URLs read from prod remote state
     MQ_FAILOVER_URL     = data.terraform_remote_state.prod.outputs.mq_amqp_failover_url
+    MQ_STOMP_URL        = data.terraform_remote_state.prod.outputs.mq_stomp_failover_url
     MQ_USERNAME         = var.mq_username
     AWS_REGION          = var.aws_region
   }
@@ -369,5 +370,109 @@ resource "kubernetes_deployment" "db_writer" {
     kubernetes_secret.aurora_credentials,
     kubernetes_secret.mq_credentials,
     aws_eks_pod_identity_association.db_writer,
+  ]
+}
+
+# ── kafka-mq-bridge Deployment ─────────────────────────────────────────────────
+# Consumes from the MSK `hr-events` topic and publishes to Amazon MQ
+# /topic/hr.events via STOMP+SSL.  Runs in the `emr-jobs` namespace and reuses
+# the `emr-job-runner` ServiceAccount which already has MSK IAM permissions via
+# Pod Identity — no additional IAM resources are needed.
+
+resource "kubernetes_config_map" "bridge_config" {
+  metadata {
+    name      = "bridge-config"
+    namespace = "emr-jobs"
+  }
+
+  data = {
+    KAFKA_BOOTSTRAP_SERVERS = data.terraform_remote_state.prod.outputs.msk_bootstrap_brokers_iam
+    KAFKA_TOPIC             = "hr-events"
+    MQ_STOMP_URL            = data.terraform_remote_state.prod.outputs.mq_stomp_failover_url
+    MQ_DESTINATION          = "/topic/hr.events"
+    MQ_USERNAME             = var.mq_username
+    AWS_REGION              = var.aws_region
+  }
+}
+
+resource "kubernetes_secret" "bridge_mq_credentials" {
+  metadata {
+    name      = "bridge-mq-credentials"
+    namespace = "emr-jobs"
+  }
+
+  data = {
+    MQ_PASSWORD = var.mq_password
+  }
+
+  type = "Opaque"
+}
+
+resource "kubernetes_deployment" "kafka_mq_bridge" {
+  metadata {
+    name      = "kafka-mq-bridge"
+    namespace = "emr-jobs"
+    labels = {
+      app = "kafka-mq-bridge"
+    }
+  }
+
+  spec {
+    replicas = 1
+
+    selector {
+      match_labels = {
+        app = "kafka-mq-bridge"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          app = "kafka-mq-bridge"
+        }
+      }
+
+      spec {
+        service_account_name = "emr-job-runner"
+
+        container {
+          name  = "bridge"
+          image = var.kafka_mq_bridge_image
+
+          env_from {
+            config_map_ref {
+              name = kubernetes_config_map.bridge_config.metadata[0].name
+            }
+          }
+
+          env {
+            name = "MQ_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.bridge_mq_credentials.metadata[0].name
+                key  = "MQ_PASSWORD"
+              }
+            }
+          }
+
+          resources {
+            requests = {
+              cpu    = "100m"
+              memory = "128Mi"
+            }
+            limits = {
+              cpu    = "500m"
+              memory = "256Mi"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    kubernetes_config_map.bridge_config,
+    kubernetes_secret.bridge_mq_credentials,
   ]
 }

@@ -263,12 +263,18 @@ eks-hub-spoke/
 │   ├── infra/                # cert-manager Helm values per env
 │   ├── apps/                 # Per-env app manifests (podinfo example)
 │   └── spoke-root/           # Root Application per spoke (app-of-apps)
+├── pipeline/
+│   ├── seed-data/            # HR seed data (50 JSONL records — 10 employees × 5 event types)
+│   ├── spark-jobs/           # PySpark batch jobs (hr_events_producer.py) submitted via EMR on EKS
+│   ├── kafka-mq-bridge/      # Kafka→MQ bridge microservice (Python, confluent-kafka + stomp.py)
+│   └── db-writer/            # DB writer microservice (Python, opensearch-py + psycopg2 + gremlinpython)
 └── scripts/
     ├── startup.sh            # Full from-zero bring-up
     ├── shutdown.sh           # Full teardown including accounts
     ├── bootstrap.sh          # State backend only
     ├── apply-all.sh          # (Re)apply all envs
     ├── teardown.sh           # Destroy clusters + accounts state
+    ├── run-pipeline.sh       # Upload HR artifacts to S3, submit EMR job, poll to completion
     └── get-kubeconfigs.sh    # Update kubeconfig for hub and prod clusters
 ```
 
@@ -292,7 +298,7 @@ Hub reads prod remote state to supply VPC/subnet/SG IDs to the transit-gateway m
 | **EMR Pod Identity** | Job execution IAM role trusted by `pods.eks.amazonaws.com`; `aws_eks_pod_identity_association` binds it to the `emr-job-runner` SA in the `emr-jobs` namespace — no OIDC issuer URL needed |
 | **EMR landing zone** | S3 bucket (`<cluster>-landing-zone-<account_id>`, AES256, versioned, public-access-blocked) for parquet source files; job execution role scoped to that bucket's ARN only |
 | **MSK (Managed Kafka)** | MSK cluster (Kafka 3.6.0, IAM/TLS auth port 9098, `kafka.m5.large`) in prod account; EMR Spark jobs write results to topics; `kafka-cluster:*` IAM actions scoped to the specific cluster/topic/group ARNs |
-| **Amazon MQ** | ActiveMQ `ACTIVE_STANDBY_MULTI_AZ` broker in prod account, co-located in the same VPC as MSK; a Kafka consumer bridge (EKS Deployment) reads from MSK topics and publishes to Amazon MQ queues/topics via AMQP+SSL (port 5671) |
+| **Amazon MQ** | ActiveMQ `ACTIVE_STANDBY_MULTI_AZ` broker in prod account, co-located in the same VPC as MSK; `kafka-mq-bridge` (EKS Deployment in `emr-jobs` ns) reads from MSK via IAM SASL and publishes to Amazon MQ topics via STOMP+SSL (port 61614); `db-writer` (EKS Deployment in `db-writer` ns) subscribes from Amazon MQ via STOMP+SSL |
 | **MQ credentials** | Username/password via `mq_username` / `mq_password` sensitive variables; stored in Terraform state (S3, AES256 encrypted); set `REPLACE_WITH_MQ_PASSWORD` in `terraform.tfvars` before first apply |
 | **VPC peering (not TGW) for prod-data** | Enforces "prod only" isolation — peering is point-to-point; no routing to hub account. Transit Gateway is not used for prod-data |
 | **No EKS in prod-data** | Pure managed-DB account; db-writer microservice runs on existing `eks-prod` cluster |
@@ -320,6 +326,7 @@ Hub reads prod remote state to supply VPC/subnet/SG IDs to the transit-gateway m
 4. **`YOUR_REPO_URL`** in appsets and spoke-root manifests must be replaced with your actual GitHub URL after pushing.
 5. **Production hardening**: SA tokens are stored in S3 state (AES256 encrypted) — consider AWS Secrets Manager for production workloads. Amazon MQ passwords are also in state; rotate via `mq_password` variable + `terraform apply`.
 6. **Amazon MQ password**: set `mq_password` in `envs/prod/terraform.tfvars` before the first apply. The placeholder `REPLACE_WITH_MQ_PASSWORD` in `terraform.tfvars.example` must be replaced with a string of 12–250 characters.
-7. **prod-data credentials**: set `aurora_db_password` and `mq_password` (must match prod) in `envs/prod-data/terraform.tfvars`. Set `db_writer_image` to your container registry image for the db-writer microservice.
-8. **db-writer image**: the `REPLACE_WITH_DB_WRITER_IMAGE` placeholder in `envs/prod-data/terraform.tfvars.example` must be replaced with a valid container image reference before applying prod-data.
+7. **prod-data credentials**: set `aurora_db_password` and `mq_password` (must match prod) in `envs/prod-data/terraform.tfvars`. Set `db_writer_image` and `kafka_mq_bridge_image` to your container registry images.
+8. **db-writer image**: the `REPLACE_WITH_DB_WRITER_IMAGE` placeholder in `envs/prod-data/terraform.tfvars.example` must be replaced with a valid container image reference before applying prod-data. Build from `pipeline/db-writer/`.
 9. **EMR service-linked role**: `aws_eks_access_entry.emr` references `AWSServiceRoleForAmazonEMRContainers` — this role is created automatically the first time you use EMR on EKS in an account. If the apply fails on a brand-new account, run `aws iam create-service-linked-role --aws-service-name emr-containers.amazonaws.com` first.
+10. **kafka-mq-bridge image**: the `REPLACE_WITH_BRIDGE_IMAGE` placeholder in `envs/prod-data/terraform.tfvars.example` must be replaced before applying prod-data. Build from `pipeline/kafka-mq-bridge/`. The bridge runs in the `emr-jobs` namespace using the existing `emr-job-runner` ServiceAccount — no additional IAM changes needed.

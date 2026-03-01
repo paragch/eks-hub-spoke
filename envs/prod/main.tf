@@ -160,6 +160,28 @@ module "amazon_mq" {
   depends_on = [module.vpc]
 }
 
+# ── HR Pipeline seed data & Spark job on S3 ───────────────────────────────────
+# Upload the HR employee seed data and the PySpark producer script to the EMR
+# landing zone bucket so they are ready for run-pipeline.sh to reference.
+
+resource "aws_s3_object" "hr_seed_data" {
+  bucket = module.emr_on_eks.landing_zone_bucket_name
+  key    = "seed-data/hr_employees.jsonl"
+  source = "${path.module}/../../pipeline/seed-data/hr_employees.jsonl"
+  etag   = filemd5("${path.module}/../../pipeline/seed-data/hr_employees.jsonl")
+
+  depends_on = [module.emr_on_eks]
+}
+
+resource "aws_s3_object" "hr_spark_job" {
+  bucket = module.emr_on_eks.landing_zone_bucket_name
+  key    = "spark-jobs/hr_events_producer.py"
+  source = "${path.module}/../../pipeline/spark-jobs/hr_events_producer.py"
+  etag   = filemd5("${path.module}/../../pipeline/spark-jobs/hr_events_producer.py")
+
+  depends_on = [module.emr_on_eks]
+}
+
 # ── JupyterHub ────────────────────────────────────────────────────────────────
 # PySpark notebook environment for data scientists. Single-user pods inherit
 # the EMR job execution role via Pod Identity (S3 + MSK + EMR API access).

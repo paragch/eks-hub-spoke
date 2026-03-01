@@ -135,6 +135,12 @@ variable "db_writer_image" {
   default     = "REPLACE_WITH_DB_WRITER_IMAGE"
 }
 
+variable "kafka_mq_bridge_image" {
+  description = "Container image for the kafka-mq-bridge microservice"
+  type        = string
+  default     = "REPLACE_WITH_BRIDGE_IMAGE"
+}
+
 variable "common_tags" {
   description = "Common tags applied to all created resources"
   type        = map(string)

@@ -36,3 +36,21 @@ output "security_group_id" {
   description = "Security group ID attached to the Amazon MQ brokers"
   value       = aws_security_group.mq.id
 }
+
+# STOMP+SSL endpoints (port 61614) — derived from the AMQP+SSL endpoints by
+# replacing the scheme and port. ActiveMQ natively supports STOMP on 61614.
+output "stomp_ssl_endpoints" {
+  description = "STOMP+SSL endpoints (port 61614) — one per broker instance"
+  value = [
+    for inst in aws_mq_broker.main.instances :
+    replace(replace(inst.endpoints[0], "amqp+ssl://", "stomp+ssl://"), ":5671", ":61614")
+  ]
+}
+
+output "stomp_failover_url" {
+  description = "Ready-to-use ActiveMQ failover URL for STOMP+SSL clients (port 61614)"
+  value = "failover:(${join(",", [
+    for inst in aws_mq_broker.main.instances :
+    replace(replace(inst.endpoints[0], "amqp+ssl://", "stomp+ssl://"), ":5671", ":61614")
+  ])})?maxReconnectAttempts=10"
+}
