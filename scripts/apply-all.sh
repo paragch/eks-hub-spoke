@@ -5,7 +5,7 @@
 #   Steps
 #   ──────────────────────────────────────────────────────────
 #   1. accounts   Apply accounts workspace (idempotent)
-#   2. spokes     Apply dev + prod + data clusters in parallel
+#   2. prod       Apply prod cluster
 #   3. hub        Apply hub cluster + Transit Gateway
 #   4. prod-data  Apply prod-data databases + db-writer microservice
 #   ──────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ step_done() { [[ -f "$CHECKPOINT" ]] && grep -qx "$1" "$CHECKPOINT"; }
 mark_done() { echo "$1" >> "$CHECKPOINT"; }
 
 show_progress() {
-  local steps=("accounts" "spokes" "hub" "prod_data")
+  local steps=("accounts" "prod" "hub" "prod_data")
   echo ""
   echo "  Checkpoint: $CHECKPOINT"
   for s in "${steps[@]}"; do
@@ -88,59 +88,19 @@ apply_accounts() {
   log_ok "accounts applied"
 }
 
-# ── Step 2: dev + prod + data in parallel ─────────────────────────────────────
-apply_spokes() {
-  if step_done spokes; then log_skip "Step 2 — Dev + prod + data clusters"; return; fi
-  log_step "Step 2/4 — Applying dev, prod, and data clusters (parallel)"
+# ── Step 2: prod ───────────────────────────────────────────────────────────────
+apply_prod() {
+  if step_done prod; then log_skip "Step 2 — Prod cluster"; return; fi
+  log_step "Step 2/4 — Applying prod cluster"
 
-  local dev_log="$ROOT_DIR/.apply-dev.log"
-  local prod_log="$ROOT_DIR/.apply-prod.log"
-  local data_log="$ROOT_DIR/.apply-data.log"
-  : > "$dev_log"; : > "$prod_log"; : > "$data_log"
-  echo "  Logs: $dev_log  |  $prod_log  |  $data_log"
+  cd "$ROOT_DIR/envs/prod"
+  terraform init -reconfigure
+  terraform plan -out=tfplan
+  terraform apply tfplan
+  rm -f tfplan
 
-  (
-    cd "$ROOT_DIR/envs/dev"
-    terraform init -reconfigure >> "$dev_log" 2>&1
-    terraform apply -auto-approve >> "$dev_log" 2>&1
-    echo "==> dev apply complete" >> "$dev_log"
-  ) &
-  local dev_pid=$!
-
-  (
-    cd "$ROOT_DIR/envs/prod"
-    terraform init -reconfigure >> "$prod_log" 2>&1
-    terraform apply -auto-approve >> "$prod_log" 2>&1
-    echo "==> prod apply complete" >> "$prod_log"
-  ) &
-  local prod_pid=$!
-
-  (
-    cd "$ROOT_DIR/envs/data"
-    terraform init -reconfigure >> "$data_log" 2>&1
-    terraform apply -auto-approve >> "$data_log" 2>&1
-    echo "==> data apply complete" >> "$data_log"
-  ) &
-  local data_pid=$!
-
-  echo "  Waiting for dev (PID $dev_pid), prod (PID $prod_pid), and data (PID $data_pid)..."
-  local dev_rc=0 prod_rc=0 data_rc=0
-  wait "$dev_pid"  || dev_rc=$?
-  wait "$prod_pid" || prod_rc=$?
-  wait "$data_pid" || data_rc=$?
-
-  if [[ $dev_rc -ne 0 ]]; then
-    log_err "Dev apply failed — see $dev_log"; tail -30 "$dev_log" >&2; exit 1
-  fi
-  if [[ $prod_rc -ne 0 ]]; then
-    log_err "Prod apply failed — see $prod_log"; tail -30 "$prod_log" >&2; exit 1
-  fi
-  if [[ $data_rc -ne 0 ]]; then
-    log_err "Data apply failed — see $data_log"; tail -30 "$data_log" >&2; exit 1
-  fi
-
-  mark_done spokes
-  log_ok "dev, prod, and data applied"
+  mark_done prod
+  log_ok "prod applied"
 }
 
 # ── Step 3: hub ───────────────────────────────────────────────────────────────
@@ -197,7 +157,7 @@ apply_prod_data() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 apply_accounts
-apply_spokes
+apply_prod
 apply_hub
 apply_prod_data
 

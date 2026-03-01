@@ -4,7 +4,6 @@ resource "kubectl_manifest" "infra_project" {
   yaml_body = file("${path.module}/../../gitops/hub/projects/infra-project.yaml")
 
   depends_on = [
-    kubernetes_secret.argocd_cluster_dev,
     kubernetes_secret.argocd_cluster_prod
   ]
 }
@@ -13,7 +12,6 @@ resource "kubectl_manifest" "apps_project" {
   yaml_body = file("${path.module}/../../gitops/hub/projects/apps-project.yaml")
 
   depends_on = [
-    kubernetes_secret.argocd_cluster_dev,
     kubernetes_secret.argocd_cluster_prod
   ]
 }

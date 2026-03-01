@@ -6,7 +6,7 @@
 #   ──────────────────────────────────────────────────────────
 #   1. hub        Destroy hub cluster (TGW, EKS, ArgoCD, Karpenter)
 #   2. prod-data  Destroy OpenSearch/Aurora/Neptune + db-writer + peering
-#   3. spokes     Destroy dev + prod + data clusters in parallel
+#   3. prod       Destroy prod cluster
 #   4. accounts   Remove accounts from Terraform state
 #   ──────────────────────────────────────────────────────────
 #
@@ -44,7 +44,7 @@ step_done() { [[ -f "$CHECKPOINT" ]] && grep -qx "$1" "$CHECKPOINT"; }
 mark_done() { echo "$1" >> "$CHECKPOINT"; }
 
 show_progress() {
-  local steps=("hub" "prod_data" "spokes" "accounts")
+  local steps=("hub" "prod_data" "prod" "accounts")
   echo ""
   echo "  Checkpoint: $CHECKPOINT"
   for s in "${steps[@]}"; do
@@ -75,7 +75,7 @@ fi
 # ── Confirmation (only on first run) ──────────────────────────────────────────
 if [[ ! -f "$CHECKPOINT" ]]; then
   echo ""
-  log_warn "This will DESTROY all four EKS clusters and associated resources."
+  log_warn "This will DESTROY both EKS clusters and associated resources."
   log_warn "This includes the prod-data databases (OpenSearch, Aurora, Neptune)."
   log_warn "AWS accounts will remain in Organizations (use shutdown.sh or close"
   log_warn "them manually if you want to remove them entirely)."
@@ -115,59 +115,17 @@ destroy_prod_data() {
   log_ok "prod-data destroyed"
 }
 
-# ── Step 3: Destroy dev + prod + data in parallel ─────────────────────────────
-destroy_spokes() {
-  if step_done spokes; then log_skip "Step 3 — Dev + prod + data clusters"; return; fi
-  log_step "Step 3/4 — Destroying dev, prod, and data clusters (parallel)"
+# ── Step 3: Destroy prod ──────────────────────────────────────────────────────
+destroy_prod() {
+  if step_done prod; then log_skip "Step 3 — Prod cluster"; return; fi
+  log_step "Step 3/4 — Destroying prod cluster"
 
-  local dev_log="$ROOT_DIR/.teardown-dev.log"
-  local prod_log="$ROOT_DIR/.teardown-prod.log"
-  local data_log="$ROOT_DIR/.teardown-data.log"
-  : > "$dev_log"; : > "$prod_log"; : > "$data_log"
-  echo "  Logs: $dev_log  |  $prod_log  |  $data_log"
+  cd "$ROOT_DIR/envs/prod"
+  terraform init -reconfigure
+  terraform destroy -auto-approve
 
-  (
-    cd "$ROOT_DIR/envs/dev"
-    terraform init -reconfigure >> "$dev_log" 2>&1
-    terraform destroy -auto-approve >> "$dev_log" 2>&1
-    echo "==> dev destroy complete" >> "$dev_log"
-  ) &
-  local dev_pid=$!
-
-  (
-    cd "$ROOT_DIR/envs/prod"
-    terraform init -reconfigure >> "$prod_log" 2>&1
-    terraform destroy -auto-approve >> "$prod_log" 2>&1
-    echo "==> prod destroy complete" >> "$prod_log"
-  ) &
-  local prod_pid=$!
-
-  (
-    cd "$ROOT_DIR/envs/data"
-    terraform init -reconfigure >> "$data_log" 2>&1
-    terraform destroy -auto-approve >> "$data_log" 2>&1
-    echo "==> data destroy complete" >> "$data_log"
-  ) &
-  local data_pid=$!
-
-  echo "  Waiting for dev (PID $dev_pid), prod (PID $prod_pid), and data (PID $data_pid)..."
-  local dev_rc=0 prod_rc=0 data_rc=0
-  wait "$dev_pid"  || dev_rc=$?
-  wait "$prod_pid" || prod_rc=$?
-  wait "$data_pid" || data_rc=$?
-
-  if [[ $dev_rc -ne 0 ]]; then
-    log_err "Dev destroy failed — see $dev_log"; tail -30 "$dev_log" >&2; exit 1
-  fi
-  if [[ $prod_rc -ne 0 ]]; then
-    log_err "Prod destroy failed — see $prod_log"; tail -30 "$prod_log" >&2; exit 1
-  fi
-  if [[ $data_rc -ne 0 ]]; then
-    log_err "Data destroy failed — see $data_log"; tail -30 "$data_log" >&2; exit 1
-  fi
-
-  mark_done spokes
-  log_ok "Dev, prod, and data clusters destroyed"
+  mark_done prod
+  log_ok "Prod cluster destroyed"
 }
 
 # ── Step 4: Remove accounts from state ────────────────────────────────────────
@@ -186,14 +144,14 @@ destroy_accounts() {
 # ── Main ──────────────────────────────────────────────────────────────────────
 destroy_hub
 destroy_prod_data
-destroy_spokes
+destroy_prod
 destroy_accounts
 
 rm -f "$CHECKPOINT"
 
 echo ""
 log_ok "All environments destroyed."
-log_warn "The hub / dev / prod AWS accounts still exist in AWS Organizations."
+log_warn "The hub / prod AWS accounts still exist in AWS Organizations."
 echo "    Close them manually or run ./scripts/shutdown.sh for a full teardown."
 echo "    The S3 state bucket and DynamoDB lock table were NOT destroyed."
 echo "    To remove them: cd bootstrap && terraform destroy"

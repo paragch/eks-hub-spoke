@@ -19,22 +19,6 @@ resource "aws_organizations_account" "hub" {
   })
 }
 
-# ── Dev account ───────────────────────────────────────────────────────────────
-
-resource "aws_organizations_account" "dev" {
-  name  = "eks-hub-spoke-dev"
-  email = var.dev_account_email
-
-  role_name = "OrganizationAccountAccessRole"
-
-  close_on_deletion = false
-
-  tags = merge(var.common_tags, {
-    Name        = "eks-hub-spoke-dev"
-    Environment = "dev"
-  })
-}
-
 # ── Prod account ──────────────────────────────────────────────────────────────
 
 resource "aws_organizations_account" "prod" {
@@ -48,22 +32,6 @@ resource "aws_organizations_account" "prod" {
   tags = merge(var.common_tags, {
     Name        = "eks-hub-spoke-prod"
     Environment = "prod"
-  })
-}
-
-# ── Data account ──────────────────────────────────────────────────────────────
-
-resource "aws_organizations_account" "data" {
-  name  = "eks-hub-spoke-data"
-  email = var.data_account_email
-
-  role_name = "OrganizationAccountAccessRole"
-
-  close_on_deletion = false
-
-  tags = merge(var.common_tags, {
-    Name        = "eks-hub-spoke-data"
-    Environment = "data"
   })
 }
 

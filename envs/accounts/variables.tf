@@ -9,18 +9,8 @@ variable "hub_account_email" {
   type        = string
 }
 
-variable "dev_account_email" {
-  description = "Unique root email address for the dev member account"
-  type        = string
-}
-
 variable "prod_account_email" {
   description = "Unique root email address for the prod member account"
-  type        = string
-}
-
-variable "data_account_email" {
-  description = "Unique root email address for the data member account"
   type        = string
 }
 

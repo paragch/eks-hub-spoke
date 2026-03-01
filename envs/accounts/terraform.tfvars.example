@@ -2,10 +2,8 @@ aws_region = "eu-west-2"
 
 # Each aws_organizations_account requires a globally unique root email address.
 # Replace the placeholders below before running terraform apply.
-hub_account_email  = "REPLACE_WITH_HUB_ACCOUNT_EMAIL"
-dev_account_email  = "REPLACE_WITH_DEV_ACCOUNT_EMAIL"
-prod_account_email = "REPLACE_WITH_PROD_ACCOUNT_EMAIL"
-data_account_email      = "REPLACE_WITH_DATA_ACCOUNT_EMAIL"
+hub_account_email       = "REPLACE_WITH_HUB_ACCOUNT_EMAIL"
+prod_account_email      = "REPLACE_WITH_PROD_ACCOUNT_EMAIL"
 prod_data_account_email = "REPLACE_WITH_PROD_DATA_ACCOUNT_EMAIL"
 
 

@@ -58,21 +58,6 @@ provider "aws" {
   }
 }
 
-# Dev spoke provider — used by transit-gateway module to create attachments
-# and routes in the dev account.
-provider "aws" {
-  alias  = "dev"
-  region = var.aws_region
-
-  assume_role {
-    role_arn = "arn:aws:iam::${var.dev_account_id}:role/OrganizationAccountAccessRole"
-  }
-
-  default_tags {
-    tags = var.common_tags
-  }
-}
-
 # Prod spoke provider — used by transit-gateway module to create attachments
 # and routes in the prod account.
 provider "aws" {
@@ -81,21 +66,6 @@ provider "aws" {
 
   assume_role {
     role_arn = "arn:aws:iam::${var.prod_account_id}:role/OrganizationAccountAccessRole"
-  }
-
-  default_tags {
-    tags = var.common_tags
-  }
-}
-
-# Data spoke provider — used by transit-gateway module to create attachments
-# and routes in the data account.
-provider "aws" {
-  alias  = "data"
-  region = var.aws_region
-
-  assume_role {
-    role_arn = "arn:aws:iam::${var.data_account_id}:role/OrganizationAccountAccessRole"
   }
 
   default_tags {

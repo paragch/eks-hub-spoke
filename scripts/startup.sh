@@ -5,12 +5,12 @@
 #   ──────────────────────────────────────────────────────────
 #   1. prereqs    Validate tools and unfilled tfvars placeholders
 #   2. bootstrap  Create S3 state bucket + DynamoDB lock table
-#   3. accounts   Provision hub / dev / prod / data / prod-data accounts
+#   3. accounts   Provision hub / prod / prod-data accounts
 #   4. wait_iam   Poll until OrganizationAccountAccessRole is assumable
-#   5. spokes     Deploy dev + prod + data EKS clusters in parallel
+#   5. prod       Deploy prod EKS cluster
 #   6. hub        Deploy hub EKS cluster + Transit Gateway
 #   7. prod-data  Deploy OpenSearch/Aurora/Neptune + db-writer microservice
-#   8. kubeconfig Update local kubeconfig for all four EKS clusters
+#   8. kubeconfig Update local kubeconfig for hub and prod clusters
 #   ──────────────────────────────────────────────────────────
 #
 #   Progress is written to .startup-progress in the repo root.
@@ -21,7 +21,7 @@
 #   • AWS CLI configured with management account credentials
 #   • Terraform >= 1.6, jq
 #   • envs/accounts/terraform.tfvars.example — copy to terraform.tfvars and
-#     fill in hub/dev/prod email addresses (startup.sh does the copy for you)
+#     fill in hub/prod email addresses (startup.sh does the copy for you)
 #
 # Usage:
 #   ./scripts/startup.sh                # interactive
@@ -84,21 +84,17 @@ tf_apply() {
 # Called at startup so skipped steps still have their variables populated.
 load_existing_config() {
   # Bucket name — read from any already-configured backend.tf
-  local sample="$ROOT_DIR/envs/dev/backend.tf"
+  local sample="$ROOT_DIR/envs/prod/backend.tf"
   BUCKET_NAME=$(awk -F'"' '/^[[:space:]]*bucket[[:space:]]*=/{print $2; exit}' "$sample" 2>/dev/null || true)
   [[ "${BUCKET_NAME:-}" == "REPLACE_WITH_STATE_BUCKET" ]] && BUCKET_NAME=""
 
   # Account IDs — read from each env's terraform.tfvars
-  HUB_ACCOUNT_ID=$(awk -F'"' '/^hub_account_id/{print $2}' "$ROOT_DIR/envs/hub/terraform.tfvars" 2>/dev/null || true)
-  DEV_ACCOUNT_ID=$(awk -F'"' '/^account_id/{print $2}'     "$ROOT_DIR/envs/dev/terraform.tfvars"  2>/dev/null || true)
-  PROD_ACCOUNT_ID=$(awk -F'"' '/^account_id/{print $2}'    "$ROOT_DIR/envs/prod/terraform.tfvars" 2>/dev/null || true)
-  DATA_ACCOUNT_ID=$(awk -F'"' '/^account_id/{print $2}'      "$ROOT_DIR/envs/data/terraform.tfvars"      2>/dev/null || true)
-  PROD_DATA_ACCOUNT_ID=$(awk -F'"' '/^account_id/{print $2}' "$ROOT_DIR/envs/prod-data/terraform.tfvars" 2>/dev/null || true)
+  HUB_ACCOUNT_ID=$(awk -F'"' '/^hub_account_id/{print $2}'     "$ROOT_DIR/envs/hub/terraform.tfvars"       2>/dev/null || true)
+  PROD_ACCOUNT_ID=$(awk -F'"' '/^account_id/{print $2}'        "$ROOT_DIR/envs/prod/terraform.tfvars"      2>/dev/null || true)
+  PROD_DATA_ACCOUNT_ID=$(awk -F'"' '/^account_id/{print $2}'   "$ROOT_DIR/envs/prod-data/terraform.tfvars" 2>/dev/null || true)
 
   [[ "${HUB_ACCOUNT_ID:-}"       == *REPLACE* ]] && HUB_ACCOUNT_ID=""
-  [[ "${DEV_ACCOUNT_ID:-}"       == *REPLACE* ]] && DEV_ACCOUNT_ID=""
   [[ "${PROD_ACCOUNT_ID:-}"      == *REPLACE* ]] && PROD_ACCOUNT_ID=""
-  [[ "${DATA_ACCOUNT_ID:-}"      == *REPLACE* ]] && DATA_ACCOUNT_ID=""
   [[ "${PROD_DATA_ACCOUNT_ID:-}" == *REPLACE* ]] && PROD_DATA_ACCOUNT_ID=""
 }
 
@@ -108,7 +104,7 @@ load_existing_config() {
 # into the .tfvars without ever modifying the .example templates.
 init_tfvars() {
   local changed=0
-  for env in accounts dev prod data hub prod-data; do
+  for env in accounts prod hub prod-data; do
     local tfvars="$ROOT_DIR/envs/$env/terraform.tfvars"
     local example="${tfvars}.example"
     if [[ ! -f "$tfvars" && -f "$example" ]]; then
@@ -127,7 +123,7 @@ init_tfvars() {
 
 # ── Print checkpoint status ────────────────────────────────────────────────────
 show_progress() {
-  local steps=("prereqs" "bootstrap" "accounts" "wait_iam" "spokes" "hub" "prod_data" "kubeconfig")
+  local steps=("prereqs" "bootstrap" "accounts" "wait_iam" "prod" "hub" "prod_data" "kubeconfig")
   echo ""
   echo "  Checkpoint: $CHECKPOINT"
   for s in "${steps[@]}"; do
@@ -198,7 +194,7 @@ run_bootstrap() {
 # ── Step 2: Create member accounts ────────────────────────────────────────────
 run_accounts() {
   if step_done accounts; then
-    log_skip "Step 2 — Accounts (hub: ${HUB_ACCOUNT_ID:-?}  dev: ${DEV_ACCOUNT_ID:-?}  prod: ${PROD_ACCOUNT_ID:-?}  data: ${DATA_ACCOUNT_ID:-?}  prod-data: ${PROD_DATA_ACCOUNT_ID:-?})"
+    log_skip "Step 2 — Accounts (hub: ${HUB_ACCOUNT_ID:-?}  prod: ${PROD_ACCOUNT_ID:-?}  prod-data: ${PROD_DATA_ACCOUNT_ID:-?})"
     return
   fi
   log_step "Step 2/7 — Create AWS Organizations member accounts"
@@ -206,27 +202,19 @@ run_accounts() {
   tf_apply "$ROOT_DIR/envs/accounts"
 
   HUB_ACCOUNT_ID=$(terraform output -raw hub_account_id)
-  DEV_ACCOUNT_ID=$(terraform output -raw dev_account_id)
   PROD_ACCOUNT_ID=$(terraform output -raw prod_account_id)
-  DATA_ACCOUNT_ID=$(terraform output -raw data_account_id)
   PROD_DATA_ACCOUNT_ID=$(terraform output -raw prod_data_account_id)
 
   log_ok "hub       account: $HUB_ACCOUNT_ID"
-  log_ok "dev       account: $DEV_ACCOUNT_ID"
   log_ok "prod      account: $PROD_ACCOUNT_ID"
-  log_ok "data      account: $DATA_ACCOUNT_ID"
   log_ok "prod-data account: $PROD_DATA_ACCOUNT_ID"
 
   # Write account IDs into every tfvars file that still has the placeholder.
   # Idempotent — sed does nothing if the pattern is already replaced.
   log_ok "Substituting account ID placeholders in terraform.tfvars files..."
-  sed_inplace "s/REPLACE_WITH_DEV_ACCOUNT_ID/$DEV_ACCOUNT_ID/g"             "$ROOT_DIR/envs/dev/terraform.tfvars"
   sed_inplace "s/REPLACE_WITH_PROD_ACCOUNT_ID/$PROD_ACCOUNT_ID/g"           "$ROOT_DIR/envs/prod/terraform.tfvars"
-  sed_inplace "s/REPLACE_WITH_DATA_ACCOUNT_ID/$DATA_ACCOUNT_ID/g"           "$ROOT_DIR/envs/data/terraform.tfvars"
   sed_inplace "s/REPLACE_WITH_HUB_ACCOUNT_ID/$HUB_ACCOUNT_ID/g"             "$ROOT_DIR/envs/hub/terraform.tfvars"
-  sed_inplace "s/REPLACE_WITH_DEV_ACCOUNT_ID/$DEV_ACCOUNT_ID/g"             "$ROOT_DIR/envs/hub/terraform.tfvars"
   sed_inplace "s/REPLACE_WITH_PROD_ACCOUNT_ID/$PROD_ACCOUNT_ID/g"           "$ROOT_DIR/envs/hub/terraform.tfvars"
-  sed_inplace "s/REPLACE_WITH_DATA_ACCOUNT_ID/$DATA_ACCOUNT_ID/g"           "$ROOT_DIR/envs/hub/terraform.tfvars"
   sed_inplace "s/REPLACE_WITH_PROD_DATA_ACCOUNT_ID/$PROD_DATA_ACCOUNT_ID/g" "$ROOT_DIR/envs/prod-data/terraform.tfvars"
   sed_inplace "s/REPLACE_WITH_PROD_ACCOUNT_ID/$PROD_ACCOUNT_ID/g"           "$ROOT_DIR/envs/prod-data/terraform.tfvars"
 
@@ -239,7 +227,7 @@ run_wait_iam() {
   if step_done wait_iam; then log_skip "Step 3 — IAM role propagation"; return; fi
   log_step "Step 3/7 — Waiting for OrganizationAccountAccessRole to propagate"
 
-  for account in "$HUB_ACCOUNT_ID" "$DEV_ACCOUNT_ID" "$PROD_ACCOUNT_ID" "$DATA_ACCOUNT_ID" "$PROD_DATA_ACCOUNT_ID"; do
+  for account in "$HUB_ACCOUNT_ID" "$PROD_ACCOUNT_ID" "$PROD_DATA_ACCOUNT_ID"; do
     local role_arn="arn:aws:iam::${account}:role/OrganizationAccountAccessRole"
     echo "  Polling: $role_arn"
     local attempt=0
@@ -262,65 +250,13 @@ run_wait_iam() {
   mark_done wait_iam
 }
 
-# ── Step 4: Apply dev + prod in parallel ──────────────────────────────────────
-run_spokes() {
-  if step_done spokes; then log_skip "Step 4 — Dev + prod + data clusters"; return; fi
-  log_step "Step 4/7 — Deploy dev, prod, and data clusters (parallel)"
-
-  local dev_log="$ROOT_DIR/.startup-dev.log"
-  local prod_log="$ROOT_DIR/.startup-prod.log"
-  local data_log="$ROOT_DIR/.startup-data.log"
-  : > "$dev_log"; : > "$prod_log"; : > "$data_log"
-  echo "  Logs: $dev_log  |  $prod_log  |  $data_log"
-
-  (
-    cd "$ROOT_DIR/envs/dev"
-    terraform init -reconfigure >> "$dev_log" 2>&1
-    terraform apply -auto-approve >> "$dev_log" 2>&1
-    echo "==> dev apply complete" >> "$dev_log"
-  ) &
-  local dev_pid=$!
-
-  (
-    cd "$ROOT_DIR/envs/prod"
-    terraform init -reconfigure >> "$prod_log" 2>&1
-    terraform apply -auto-approve >> "$prod_log" 2>&1
-    echo "==> prod apply complete" >> "$prod_log"
-  ) &
-  local prod_pid=$!
-
-  (
-    cd "$ROOT_DIR/envs/data"
-    terraform init -reconfigure >> "$data_log" 2>&1
-    terraform apply -auto-approve >> "$data_log" 2>&1
-    echo "==> data apply complete" >> "$data_log"
-  ) &
-  local data_pid=$!
-
-  echo "  Waiting for dev (PID $dev_pid), prod (PID $prod_pid), and data (PID $data_pid)..."
-  local dev_rc=0 prod_rc=0 data_rc=0
-  wait "$dev_pid"  || dev_rc=$?
-  wait "$prod_pid" || prod_rc=$?
-  wait "$data_pid" || data_rc=$?
-
-  if [[ $dev_rc -ne 0 ]]; then
-    log_err "Dev apply failed — see $dev_log"
-    tail -30 "$dev_log" >&2
-    exit 1
-  fi
-  if [[ $prod_rc -ne 0 ]]; then
-    log_err "Prod apply failed — see $prod_log"
-    tail -30 "$prod_log" >&2
-    exit 1
-  fi
-  if [[ $data_rc -ne 0 ]]; then
-    log_err "Data apply failed — see $data_log"
-    tail -30 "$data_log" >&2
-    exit 1
-  fi
-
-  mark_done spokes
-  log_ok "Dev, prod, and data clusters deployed"
+# ── Step 4: Apply prod ────────────────────────────────────────────────────────
+run_prod() {
+  if step_done prod; then log_skip "Step 4 — Prod cluster"; return; fi
+  log_step "Step 4/7 — Deploy prod cluster"
+  tf_apply "$ROOT_DIR/envs/prod"
+  mark_done prod
+  log_ok "Prod cluster deployed"
 }
 
 # ── Step 5: Apply hub ─────────────────────────────────────────────────────────
@@ -396,10 +332,10 @@ fi
 if [[ -z "$AUTO_APPROVE" && ! -f "$CHECKPOINT" ]]; then
   echo "This script will:"
   echo "  1. Create an S3 state bucket + DynamoDB lock table"
-  echo "  2. Provision hub / dev / prod / data / prod-data AWS accounts via Organizations"
-  echo "  3. Deploy four EKS clusters (hub, dev, prod, data)"
-  echo "  4. Set up Transit Gateway cross-account connectivity"
-  echo "  5. Register dev + prod + data clusters in ArgoCD"
+  echo "  2. Provision hub / prod / prod-data AWS accounts via Organizations"
+  echo "  3. Deploy two EKS clusters (hub, prod)"
+  echo "  4. Set up Transit Gateway cross-account connectivity (hub ↔ prod)"
+  echo "  5. Register prod cluster in ArgoCD"
   echo "  6. Deploy prod-data databases (OpenSearch/Aurora/Neptune) + db-writer microservice"
   echo ""
   read -rp "Continue? [y/N] " yn
@@ -410,7 +346,7 @@ run_prereqs
 run_bootstrap
 run_accounts
 run_wait_iam
-run_spokes
+run_prod
 run_hub
 run_prod_data
 run_kubeconfig
@@ -424,9 +360,7 @@ echo ""
 echo "    Cluster   Account"
 echo "    --------  ---------------"
 echo "    eks-hub       ${HUB_ACCOUNT_ID}"
-echo "    eks-dev       ${DEV_ACCOUNT_ID}"
 echo "    eks-prod      ${PROD_ACCOUNT_ID}"
-echo "    eks-data      ${DATA_ACCOUNT_ID}"
 echo "    prod-data     ${PROD_DATA_ACCOUNT_ID}  (no cluster — OpenSearch/Aurora/Neptune)"
 echo ""
 echo "  kubectl config get-contexts   # list available contexts"

@@ -4,9 +4,7 @@ state_bucket  = "REPLACE_WITH_STATE_BUCKET"
 
 # Replace with actual account IDs from: terraform output -chdir=envs/accounts
 hub_account_id  = "REPLACE_WITH_HUB_ACCOUNT_ID"
-dev_account_id  = "REPLACE_WITH_DEV_ACCOUNT_ID"
 prod_account_id = "REPLACE_WITH_PROD_ACCOUNT_ID"
-data_account_id = "REPLACE_WITH_DATA_ACCOUNT_ID"
 
 vpc_cidr             = "10.0.0.0/16"
 public_subnet_cidrs  = ["10.0.0.0/24", "10.0.1.0/24"]

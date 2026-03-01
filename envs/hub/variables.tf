@@ -81,18 +81,8 @@ variable "hub_account_id" {
   type        = string
 }
 
-variable "dev_account_id" {
-  description = "AWS account ID for the dev member account"
-  type        = string
-}
-
 variable "prod_account_id" {
   description = "AWS account ID for the prod member account"
-  type        = string
-}
-
-variable "data_account_id" {
-  description = "AWS account ID for the data member account"
   type        = string
 }
 

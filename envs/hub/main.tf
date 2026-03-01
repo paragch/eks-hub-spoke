@@ -15,17 +15,6 @@ data "terraform_remote_state" "accounts" {
   }
 }
 
-# ── Remote state from dev spoke ───────────────────────────────────────────────
-
-data "terraform_remote_state" "dev" {
-  backend = "s3"
-  config = {
-    bucket = var.state_bucket
-    key    = "dev/terraform.tfstate"
-    region = var.aws_region
-  }
-}
-
 # ── Remote state from prod spoke ──────────────────────────────────────────────
 
 data "terraform_remote_state" "prod" {
@@ -33,17 +22,6 @@ data "terraform_remote_state" "prod" {
   config = {
     bucket = var.state_bucket
     key    = "prod/terraform.tfstate"
-    region = var.aws_region
-  }
-}
-
-# ── Remote state from data spoke ──────────────────────────────────────────────
-
-data "terraform_remote_state" "data" {
-  backend = "s3"
-  config = {
-    bucket = var.state_bucket
-    key    = "data/terraform.tfstate"
     region = var.aws_region
   }
 }
@@ -128,9 +106,7 @@ module "transit_gateway" {
 
   providers = {
     aws.hub  = aws.hub
-    aws.dev  = aws.dev
     aws.prod = aws.prod
-    aws.data = aws.data
   }
 
   # Hub inputs
@@ -139,13 +115,6 @@ module "transit_gateway" {
   hub_private_subnet_ids      = module.vpc.private_subnet_ids
   hub_private_route_table_ids = module.vpc.private_route_table_ids
 
-  # Dev inputs (from dev remote state)
-  dev_vpc_id                  = data.terraform_remote_state.dev.outputs.vpc_id
-  dev_vpc_cidr                = data.terraform_remote_state.dev.outputs.vpc_cidr
-  dev_private_subnet_ids      = data.terraform_remote_state.dev.outputs.private_subnet_ids
-  dev_private_route_table_ids = data.terraform_remote_state.dev.outputs.private_route_table_ids
-  dev_cluster_sg_id           = data.terraform_remote_state.dev.outputs.cluster_security_group_id
-
   # Prod inputs (from prod remote state)
   prod_vpc_id                  = data.terraform_remote_state.prod.outputs.vpc_id
   prod_vpc_cidr                = data.terraform_remote_state.prod.outputs.vpc_cidr
@@ -153,16 +122,7 @@ module "transit_gateway" {
   prod_private_route_table_ids = data.terraform_remote_state.prod.outputs.private_route_table_ids
   prod_cluster_sg_id           = data.terraform_remote_state.prod.outputs.cluster_security_group_id
 
-  # Data inputs (from data remote state)
-  data_vpc_id                  = data.terraform_remote_state.data.outputs.vpc_id
-  data_vpc_cidr                = data.terraform_remote_state.data.outputs.vpc_cidr
-  data_private_subnet_ids      = data.terraform_remote_state.data.outputs.private_subnet_ids
-  data_private_route_table_ids = data.terraform_remote_state.data.outputs.private_route_table_ids
-  data_cluster_sg_id           = data.terraform_remote_state.data.outputs.cluster_security_group_id
-
-  dev_account_id  = var.dev_account_id
   prod_account_id = var.prod_account_id
-  data_account_id = var.data_account_id
   aws_region      = var.aws_region
   common_tags     = var.common_tags
 
